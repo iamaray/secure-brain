@@ -1,0 +1,143 @@
+package httpapi
+
+import (
+	"net/http"
+	"strings"
+	"sync"
+
+	"secure-brain/internal/domain"
+)
+
+var defaultOffCanvasServices = map[string]struct{}{
+	"service.pii-scan":      {},
+	"service.policy-check":  {},
+	"service.deduplication": {},
+}
+
+// networkCanvasState records local demo canvas choices without changing the
+// durable node catalog or the executable route graph.
+type networkCanvasState struct {
+	mu            sync.RWMutex
+	addedByUser   map[string]map[string]struct{}
+	removedByUser map[string]map[string]struct{}
+}
+
+func newNetworkCanvasState() *networkCanvasState {
+	return &networkCanvasState{
+		addedByUser:   make(map[string]map[string]struct{}),
+		removedByUser: make(map[string]map[string]struct{}),
+	}
+}
+
+func (s *networkCanvasState) onCanvas(userID, nodeType, canonicalID string) bool {
+	if nodeType != "brain" && nodeType != "service" {
+		return true
+	}
+	s.mu.RLock()
+	_, removed := s.removedByUser[userID][canonicalID]
+	_, added := s.addedByUser[userID][canonicalID]
+	s.mu.RUnlock()
+	if removed {
+		return false
+	}
+	if added {
+		return true
+	}
+	_, startsOffCanvas := defaultOffCanvasServices[canonicalID]
+	return nodeType != "service" || !startsOffCanvas
+}
+
+func (s *networkCanvasState) add(userID, canonicalID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	added := s.addedByUser[userID]
+	if added == nil {
+		added = make(map[string]struct{})
+		s.addedByUser[userID] = added
+	}
+	added[canonicalID] = struct{}{}
+	delete(s.removedByUser[userID], canonicalID)
+}
+
+func (s *networkCanvasState) remove(userID, canonicalID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := s.removedByUser[userID]
+	if removed == nil {
+		removed = make(map[string]struct{})
+		s.removedByUser[userID] = removed
+	}
+	removed[canonicalID] = struct{}{}
+	delete(s.addedByUser[userID], canonicalID)
+}
+
+type canvasNode struct {
+	CanonicalID string
+	DisplayName string
+	Type        string
+	OwnerUserID string
+}
+
+func (a *API) resolveCanvasNode(r *http.Request, canonicalID string) (canvasNode, error) {
+	canonicalID = strings.TrimSpace(canonicalID)
+	switch {
+	case strings.HasPrefix(canonicalID, "brain."):
+		brain, err := a.store.GetBrainByCanonicalID(r.Context(), canonicalID)
+		if err != nil {
+			return canvasNode{}, databaseError(err)
+		}
+		return canvasNode{CanonicalID: brain.CanonicalID, DisplayName: brain.DisplayName, Type: "brain", OwnerUserID: brain.OwnerUserID}, nil
+	case strings.HasPrefix(canonicalID, "service."):
+		service, err := a.store.GetServiceByCanonicalID(r.Context(), canonicalID)
+		if err != nil {
+			return canvasNode{}, databaseError(err)
+		}
+		return canvasNode{CanonicalID: service.CanonicalID, DisplayName: service.DisplayName, Type: "service", OwnerUserID: service.OwnerUserID}, nil
+	default:
+		return canvasNode{}, domain.NewError(domain.CodeInvalidRequest, "node_id must be a Brain or Service canonical ID.")
+	}
+}
+
+func removeCanvasNodeForUser(state *networkCanvasState, userID string, node canvasNode) error {
+	if node.OwnerUserID == userID {
+		return domain.NewError(domain.CodeNotAuthorized, "Owned nodes cannot be removed from your canvas.")
+	}
+	state.remove(userID, node.CanonicalID)
+	return nil
+}
+
+func (a *API) addNetworkNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	node, err := a.resolveCanvasNode(r, body.NodeID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	userID := activeUser(r.Context()).ID
+	a.networkCanvas.add(userID, node.CanonicalID)
+	writeData(w, r, http.StatusOK, map[string]any{
+		"node_id":      node.CanonicalID,
+		"display_name": node.DisplayName,
+		"type":         node.Type,
+		"on_canvas":    true,
+	})
+}
+
+func (a *API) removeNetworkNode(w http.ResponseWriter, r *http.Request) {
+	node, err := a.resolveCanvasNode(r, r.PathValue("nodeId"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := removeCanvasNodeForUser(a.networkCanvas, activeUser(r.Context()).ID, node); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
