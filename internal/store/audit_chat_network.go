@@ -60,7 +60,7 @@ func (s *Store) InsertAuditEvent(ctx context.Context, input application.AuditRec
 
 func (s *Store) ListAuditEvents(ctx context.Context, viewerUserID domain.RecordID, filter application.AuditQuery) ([]domain.AuditEvent, error) {
 	if filter.Limit <= 0 {
-		filter.Limit = 50
+		filter.Limit = application.DefaultLimits().DefaultPageSize
 	}
 	rows, err := s.db.Query(ctx, `
 		select ae.id, ae.event_type, ae.actor_user_id, ae.resource_type, ae.resource_id,
@@ -104,7 +104,7 @@ func scanChatMessage(row interface{ Scan(...any) error }) (domain.ChatMessage, e
 
 func (s *Store) ListChatMessages(ctx context.Context, brainID, userID domain.RecordID, limit int) ([]domain.ChatMessage, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = application.DefaultLimits().ChatHistoryMessages
 	}
 	rows, err := s.db.Query(ctx, `
 		select id, brain_id, user_id, role, content, model, created_at
@@ -268,7 +268,7 @@ func (s *Store) ListNetworkRoutes(ctx context.Context) ([]application.NetworkRou
 
 func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]application.NetworkNodeSnapshot, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = application.DefaultLimits().DefaultPageSize
 	}
 	rows, err := s.db.Query(ctx, `
 		select canonical_id, node_type, display_name, owner_user_id, status

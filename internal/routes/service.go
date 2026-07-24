@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"time"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -40,8 +40,12 @@ type HopResult struct {
 
 // ExecuteHops traverses the finite supplied slice exactly once. Duplicate
 // Services remain separate occurrences and produce separate result rows.
-func ExecuteHops(ctx context.Context, executor ServiceExecutor, services []domain.Service, input domain.Payload) (domain.Payload, []HopResult, error) {
-	if len(services) > DefaultMaxRouteHops {
+func ExecuteHops(ctx context.Context, executor ServiceExecutor, services []domain.Service, input domain.Payload, limits application.Limits, clock application.Clock) (domain.Payload, []HopResult, error) {
+	limits = limits.WithDefaults()
+	if clock == nil {
+		clock = application.SystemClock{}
+	}
+	if len(services) > limits.MaxRouteHops {
 		return domain.Payload{}, nil, domain.NewError(domain.CodeRouteTooLong, "The saved route exceeds the maximum Service-hop limit.")
 	}
 	if len(services) == 0 {
@@ -61,9 +65,9 @@ func ExecuteHops(ctx context.Context, executor ServiceExecutor, services []domai
 		if fingerprintErr != nil {
 			return domain.Payload{}, results, domain.WrapError(domain.CodeServiceHopFailed, "The payload metadata cannot be verified.", fingerprintErr)
 		}
-		started := time.Now()
+		started := clock.Now()
 		output, err := executor.Execute(ctx, service, current)
-		duration := time.Since(started).Milliseconds()
+		duration := clock.Now().Sub(started).Milliseconds()
 		if duration < 0 {
 			duration = 0
 		}

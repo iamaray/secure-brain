@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -74,7 +75,7 @@ func TestExecuteCoreOperationsGolden(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload, err := Execute(tt.assets, tt.req, Limits{})
+			payload, err := Execute(tt.assets, tt.req, application.Limits{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,7 +93,7 @@ func TestExecuteCoreOperationsGolden(t *testing.T) {
 func TestRawReadSinglePreservesOriginalPayload(t *testing.T) {
 	in := asset("asset-1", "notes.md", domain.AssetFormatMarkdown, domain.AssetStateReady, "exact\x00bytes")
 	in.Asset.MediaType = "text/markdown"
-	payload, err := Execute([]Asset{in}, Request{Operation: OperationRawRead}, Limits{})
+	payload, err := Execute([]Asset{in}, Request{Operation: OperationRawRead}, application.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,11 +109,11 @@ func TestRawReadMultipleHasDeterministicGoldenManifest(t *testing.T) {
 	a := asset("a", "a.txt", domain.AssetFormatText, domain.AssetStateReady, "A")
 	b := asset("b", "b.bin", domain.AssetFormatBinary, domain.AssetStateReady, "\x00\xff")
 	b.Asset.MediaType = "application/octet-stream"
-	p1, err := Execute([]Asset{a, b}, Request{Operation: OperationRawRead}, Limits{})
+	p1, err := Execute([]Asset{a, b}, Request{Operation: OperationRawRead}, application.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := Execute([]Asset{a, b}, Request{Operation: OperationRawRead}, Limits{})
+	p2, err := Execute([]Asset{a, b}, Request{Operation: OperationRawRead}, application.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestTextSearchUnicodeFoldOrderContextAndSkip(t *testing.T) {
 		asset("skip", "blob.bin", domain.AssetFormatBinary, domain.AssetStateReady, "Σ"),
 		asset("second", "two.md", domain.AssetFormatMarkdown, domain.AssetStateReady, strings.Repeat("x", 220)+"Σ"),
 	}
-	payload, err := Execute(assets, Request{Operation: OperationTextSearch, Query: "Σ"}, Limits{MaxContextRunes: 20})
+	payload, err := Execute(assets, Request{Operation: OperationTextSearch, Query: "Σ"}, application.Limits{MaxTextContextRunes: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +164,7 @@ func TestTextSearchLimitsMatches(t *testing.T) {
 			asset("a", "a.txt", domain.AssetFormatText, domain.AssetStateReady, "hit\nhit\nhit"),
 			asset("later-skip", "x.bin", domain.AssetFormatBinary, domain.AssetStateReady, "hit"),
 		},
-		Request{Operation: OperationTextSearch, Query: "hit"}, Limits{MaxTextMatches: 2},
+		Request{Operation: OperationTextSearch, Query: "hit"}, application.Limits{MaxTextMatches: 2},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +193,7 @@ func TestTextSearchRejectsInvalidAndIncompatibleRequests(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Execute(tt.assets, Request{Operation: OperationTextSearch, Query: tt.query}, Limits{})
+			_, err := Execute(tt.assets, Request{Operation: OperationTextSearch, Query: tt.query}, application.Limits{})
 			if errorCode(t, err) != domain.CodeQueryInvalid {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -212,7 +213,7 @@ func TestCSVQueryInferenceFilteringProjectionPagination(t *testing.T) {
 			{Column: "note", Operator: "contains", Value: "foundation"},
 		},
 		Limit: 1,
-	}, Limits{})
+	}, application.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,14 +289,14 @@ func TestCSVValidationAndBounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Execute([]Asset{a}, tt.req, Limits{})
+			_, err := Execute([]Asset{a}, tt.req, application.Limits{})
 			if errorCode(t, err) != domain.CodeQueryInvalid {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
 
-	payload, err := Execute([]Asset{a}, Request{Operation: OperationCSVQuery, Limit: 100}, Limits{MaxCSVRows: 1})
+	payload, err := Execute([]Asset{a}, Request{Operation: OperationCSVQuery, Limit: 100}, application.Limits{MaxCSVRows: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +318,7 @@ func TestCSVRejectsMalformedAndAmbiguousHeaders(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := asset("a", "a.csv", domain.AssetFormatCSV, domain.AssetStateReady, body)
-			_, err := Execute([]Asset{a}, Request{Operation: OperationCSVQuery}, Limits{})
+			_, err := Execute([]Asset{a}, Request{Operation: OperationCSVQuery}, application.Limits{})
 			if errorCode(t, err) != domain.CodeQueryInvalid {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -328,7 +329,7 @@ func TestCSVRejectsMalformedAndAmbiguousHeaders(t *testing.T) {
 func TestCSVSkipsIncompatibleButRejectsAllIncompatible(t *testing.T) {
 	csvAsset := asset("csv", "a.csv", domain.AssetFormatCSV, domain.AssetStateReady, "x\ny\n")
 	bin := asset("bin", "b.bin", domain.AssetFormatBinary, domain.AssetStateReady, "x")
-	payload, err := Execute([]Asset{bin, csvAsset}, Request{Operation: OperationCSVQuery}, Limits{})
+	payload, err := Execute([]Asset{bin, csvAsset}, Request{Operation: OperationCSVQuery}, application.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +340,7 @@ func TestCSVSkipsIncompatibleButRejectsAllIncompatible(t *testing.T) {
 	if len(got.Skipped) != 1 || got.Skipped[0].AssetID != "bin" || len(got.Files) != 1 {
 		t.Fatalf("unexpected mixed compatibility result: %#v", got)
 	}
-	_, err = Execute([]Asset{bin}, Request{Operation: OperationCSVQuery}, Limits{})
+	_, err = Execute([]Asset{bin}, Request{Operation: OperationCSVQuery}, application.Limits{})
 	if errorCode(t, err) != domain.CodeQueryInvalid {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -348,7 +349,7 @@ func TestCSVSkipsIncompatibleButRejectsAllIncompatible(t *testing.T) {
 func TestCSVLimitIsGlobalAcrossFiles(t *testing.T) {
 	one := asset("one", "one.csv", domain.AssetFormatCSV, domain.AssetStateReady, "x\na\nb\n")
 	two := asset("two", "two.csv", domain.AssetFormatCSV, domain.AssetStateReady, "x\nc\nd\n")
-	payload, err := Execute([]Asset{one, two}, Request{Operation: OperationCSVQuery, Limit: 2}, Limits{})
+	payload, err := Execute([]Asset{one, two}, Request{Operation: OperationCSVQuery, Limit: 2}, application.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,20 +367,19 @@ func TestCSVLimitIsGlobalAcrossFiles(t *testing.T) {
 
 func TestPayloadLimitAndUnknownOperation(t *testing.T) {
 	a := asset("a", "a.bin", domain.AssetFormatBinary, domain.AssetStateReady, "1234")
-	_, err := Execute([]Asset{a}, Request{Operation: OperationRawRead}, Limits{MaxPayloadBytes: 3})
+	_, err := Execute([]Asset{a}, Request{Operation: OperationRawRead}, application.Limits{MaxPayloadBytes: 3})
 	if errorCode(t, err) != domain.CodePayloadTooLarge {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_, err = Execute([]Asset{a}, Request{Operation: "sql"}, Limits{})
+	_, err = Execute([]Asset{a}, Request{Operation: "sql"}, application.Limits{})
 	if errorCode(t, err) != domain.CodeQueryInvalid {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestLimitsCannotExceedHardSafetyBounds(t *testing.T) {
-	got := (Limits{MaxPayloadBytes: defaultMaxPayloadBytes + 1, MaxCSVRows: 501, MaxTextMatches: 201, MaxContextRunes: 201}).withDefaults()
-	want := Limits{MaxPayloadBytes: defaultMaxPayloadBytes, MaxCSVRows: 500, MaxTextMatches: 200, MaxContextRunes: 200}
-	if got != want {
+	got := (application.Limits{MaxPayloadBytes: application.MaxPayloadBytes + 1, MaxCSVRows: 501, MaxTextMatches: 201, MaxTextContextRunes: 201}).WithDefaults()
+	if want := application.DefaultLimits(); got != want {
 		t.Fatalf("limits = %#v, want %#v", got, want)
 	}
 }

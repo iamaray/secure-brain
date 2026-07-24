@@ -71,7 +71,7 @@ func (a *API) listQueryPaths(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	paths, err := a.store.ListQueryPaths(r.Context(), brain.ID, 50)
+	paths, err := a.store.ListQueryPaths(r.Context(), brain.ID, a.limits.DefaultPageSize)
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -286,7 +286,7 @@ func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID 
 	if err != nil {
 		return application.QueryPathCommand{}, nil, databaseError(err)
 	}
-	paths, err := a.store.ListQueryPaths(r.Context(), brain.ID, 200)
+	paths, err := a.store.ListQueryPaths(r.Context(), brain.ID, a.limits.MaxPageSize)
 	if err != nil {
 		return application.QueryPathCommand{}, nil, databaseError(err)
 	}
@@ -313,7 +313,7 @@ func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID 
 		}
 	}
 	cfg := routes.Configuration{QueryPathID: queryPathID, Path: body.Path, AssetIDs: body.AssetIDs, Operations: body.Operations, Visibility: body.Visibility, AllowedBrainIDs: body.AllowedBrainIDs, AllowedServiceIDs: body.AllowedServiceIDs, Route: routeConfig, State: body.State}
-	fields := routes.ValidateConfiguration(cfg, routes.ValidationContext{ActorUserID: activeUser(r.Context()).ID, SourceBrain: brain, Assets: assetMap, Brains: brainMap, Services: serviceMap, ExistingPaths: existing, MaxHops: a.maxRouteHops})
+	fields := routes.ValidateConfiguration(cfg, routes.ValidationContext{ActorUserID: activeUser(r.Context()).ID, SourceBrain: brain, Assets: assetMap, Brains: brainMap, Services: serviceMap, ExistingPaths: existing, MaxHops: a.limits.MaxRouteHops})
 	path, _ := domain.ParseQueryPath(body.Path)
 	input := application.QueryPathCommand{BrainID: brain.ID, Path: path, Visibility: body.Visibility, State: body.State, Operations: body.Operations}
 	for _, id := range body.AssetIDs {

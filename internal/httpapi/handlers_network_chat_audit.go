@@ -13,7 +13,7 @@ import (
 
 func (a *API) getNetwork(w http.ResponseWriter, r *http.Request) {
 	userID := activeUser(r.Context()).ID
-	nodes, err := a.store.SearchNodes(r.Context(), "", 200)
+	nodes, err := a.store.SearchNodes(r.Context(), "", a.limits.MaxPageSize)
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -85,7 +85,7 @@ func (a *API) searchNetwork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "The search query is too long."))
 		return
 	}
-	nodes, err := a.store.SearchNodes(r.Context(), query, 50)
+	nodes, err := a.store.SearchNodes(r.Context(), query, a.limits.DefaultPageSize)
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -109,7 +109,12 @@ func (a *API) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "The audit status is invalid."))
 		return
 	}
-	events, err := a.store.ListAuditEvents(r.Context(), activeUser(r.Context()).ID, application.AuditQuery{NodeID: principalAtBoundary(r.URL.Query().Get("node_id")), EventType: r.URL.Query().Get("event_type"), Status: status, Limit: 50})
+	events, err := a.store.ListAuditEvents(r.Context(), activeUser(r.Context()).ID, application.AuditQuery{
+		NodeID:    principalAtBoundary(r.URL.Query().Get("node_id")),
+		EventType: r.URL.Query().Get("event_type"),
+		Status:    status,
+		Limit:     a.limits.DefaultPageSize,
+	})
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -123,7 +128,7 @@ func (a *API) getChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	messages, err := a.store.ListChatMessages(r.Context(), brain.ID, activeUser(r.Context()).ID, a.chatHistoryMessages)
+	messages, err := a.store.ListChatMessages(r.Context(), brain.ID, activeUser(r.Context()).ID, a.limits.ChatHistoryMessages)
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -150,11 +155,11 @@ func (a *API) postChat(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Message = strings.TrimSpace(body.Message)
 	count := len([]rune(body.Message))
-	if count == 0 || count > 4000 {
+	if count == 0 || count > a.limits.MaxChatMessageRunes {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "Chat messages must contain 1 to 4,000 characters."))
 		return
 	}
-	history, err := a.store.ListChatMessages(r.Context(), brain.ID, activeUser(r.Context()).ID, a.chatHistoryMessages)
+	history, err := a.store.ListChatMessages(r.Context(), brain.ID, activeUser(r.Context()).ID, a.limits.ChatHistoryMessages)
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -166,7 +171,12 @@ func (a *API) postChat(w http.ResponseWriter, r *http.Request) {
 	input = append(input, openaiapi.Message{Role: "user", Content: body.Message})
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	response, err := a.chat.Respond(ctx, openaiapi.Request{Model: a.chatModel, Instructions: openaiapi.BrainInstructions(brain.DisplayName, string(brain.CanonicalID)), Input: input, MaxOutputTokens: a.chatMaxOutputTokens})
+	response, err := a.chat.Respond(ctx, openaiapi.Request{
+		Model:           a.chatModel,
+		Instructions:    openaiapi.BrainInstructions(brain.DisplayName, string(brain.CanonicalID)),
+		Input:           input,
+		MaxOutputTokens: a.limits.ChatMaxOutputTokens,
+	})
 	if err != nil {
 		a.audit(r, "chat.failed", "brain", brain.ID, &brain.ID, nil, nil, domain.AuditStatusFailed, application.AuditMetadata{"error_code": domain.CodeChatProviderError}, []domain.RecordID{activeUser(r.Context()).ID})
 		writeError(w, r, err)

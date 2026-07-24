@@ -297,7 +297,7 @@ func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID d
 
 func (s *Store) ListQueryPaths(ctx context.Context, brainID domain.RecordID, limit int) ([]domain.QueryPath, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = application.DefaultLimits().DefaultPageSize
 	}
 	rows, err := s.db.Query(ctx, `
 		select id, brain_id, path, visibility, state, operations,

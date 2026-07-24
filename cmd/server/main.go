@@ -49,7 +49,7 @@ func main() {
 		logger.Error("database schema version 1 is missing; run db/schema.sql")
 		os.Exit(1)
 	}
-	objects, err := storage.NewClient(cfg.SupabaseURL, cfg.StorageBucket, cfg.SupabaseServiceRoleKey, &http.Client{Timeout: 60 * time.Second})
+	objects, err := storage.NewClient(cfg.SupabaseURL, cfg.StorageBucket, cfg.SupabaseServiceRoleKey, &http.Client{Timeout: 60 * time.Second}, cfg.Limits.MaxObjectBytes())
 	if err != nil {
 		logger.Error("Storage configuration is invalid")
 		os.Exit(1)
@@ -62,7 +62,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	handler := httpapi.New(db, objects, httpapi.Options{SessionSecret: []byte(cfg.SessionSecret), FrontendOrigin: cfg.FrontendOrigin, Logger: logger, MaxFileBytes: cfg.MaxFileBytes, MaxPreviewBytes: cfg.MaxPreviewBytes, MaxCSVRows: cfg.MaxCSVRows, MaxRoutePayloadBytes: int(cfg.MaxRoutePayloadBytes), MaxRouteHops: cfg.MaxRouteHops, TransferTTL: cfg.TransferTTL, Chat: chat, ChatModel: cfg.OpenAIModel, ChatHistoryMessages: cfg.ChatHistoryMessages, ChatMaxOutputTokens: cfg.ChatMaxOutputTokens, ChatDisabled: cfg.ChatDisabled})
+	handler := httpapi.New(db, objects, httpapi.Options{SessionSecret: []byte(cfg.SessionSecret), FrontendOrigin: cfg.FrontendOrigin, Logger: logger, Limits: cfg.Limits, Chat: chat, ChatModel: cfg.OpenAIModel, ChatDisabled: cfg.ChatDisabled})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		logger.Info("server started", "address", cfg.HTTPAddr)

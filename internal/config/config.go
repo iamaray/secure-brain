@@ -9,11 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"secure-brain/internal/application"
 )
-
-const SQLMaxRouteHops = 20
-
-const SQLMaxPayloadBytes = int64(25 << 20)
 
 type Config struct {
 	DatabaseURL            string
@@ -22,21 +20,14 @@ type Config struct {
 	OpenAIAPIKey           string
 	SessionSecret          string
 
-	HTTPAddr             string
-	FrontendOrigin       string
-	OpenAIModel          string
-	OpenAIBaseURL        string
-	StorageBucket        string
-	MaxFileBytes         int64
-	MaxRouteHops         int
-	MaxRoutePayloadBytes int64
-	MaxPreviewBytes      int64
-	MaxCSVRows           int
-	TransferTTL          time.Duration
-	ChatHistoryMessages  int
-	ChatMaxOutputTokens  int
-	ChatDisabled         bool
-	LogLevel             slog.Level
+	HTTPAddr       string
+	FrontendOrigin string
+	OpenAIModel    string
+	OpenAIBaseURL  string
+	StorageBucket  string
+	Limits         application.Limits
+	ChatDisabled   bool
+	LogLevel       slog.Level
 }
 
 // Load reads and validates configuration from the process environment.
@@ -46,7 +37,7 @@ func Load() (Config, error) {
 
 // LoadFrom makes strict configuration parsing independently testable.
 func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
-	var c Config
+	c := Config{Limits: application.DefaultLimits()}
 	var err error
 
 	c.DatabaseURL, err = requiredDatabaseURL(lookup, "DATABASE_URL")
@@ -84,39 +75,40 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 	}
 	c.StorageBucket = optional(lookup, "STORAGE_BUCKET", "securebrain-private")
 
-	if c.MaxFileBytes, err = int64Value(lookup, "MAX_FILE_BYTES", 10485760); err != nil {
+	if c.Limits.MaxFileBytes, err = int64Value(lookup, "MAX_FILE_BYTES", c.Limits.MaxFileBytes); err != nil {
 		return Config{}, err
 	}
-	if c.MaxFileBytes > SQLMaxPayloadBytes {
-		return Config{}, fmt.Errorf("MAX_FILE_BYTES may not exceed %d", SQLMaxPayloadBytes)
+	if c.Limits.MaxFileBytes > application.MaxPayloadBytes {
+		return Config{}, fmt.Errorf("MAX_FILE_BYTES may not exceed %d", application.MaxPayloadBytes)
 	}
-	if c.MaxRouteHops, err = intValue(lookup, "MAX_ROUTE_HOPS", 20); err != nil {
+	if c.Limits.MaxRouteHops, err = intValue(lookup, "MAX_ROUTE_HOPS", c.Limits.MaxRouteHops); err != nil {
 		return Config{}, err
 	}
-	if c.MaxRouteHops > SQLMaxRouteHops {
-		return Config{}, fmt.Errorf("MAX_ROUTE_HOPS may not exceed %d", SQLMaxRouteHops)
+	if c.Limits.MaxRouteHops > application.MaxRouteHops {
+		return Config{}, fmt.Errorf("MAX_ROUTE_HOPS may not exceed %d", application.MaxRouteHops)
 	}
-	if c.MaxRoutePayloadBytes, err = int64Value(lookup, "MAX_ROUTE_PAYLOAD_BYTES", 26214400); err != nil {
+	if c.Limits.MaxPayloadBytes, err = int64Value(lookup, "MAX_ROUTE_PAYLOAD_BYTES", c.Limits.MaxPayloadBytes); err != nil {
 		return Config{}, err
 	}
-	if c.MaxRoutePayloadBytes > SQLMaxPayloadBytes {
-		return Config{}, fmt.Errorf("MAX_ROUTE_PAYLOAD_BYTES may not exceed %d", SQLMaxPayloadBytes)
+	if c.Limits.MaxPayloadBytes > application.MaxPayloadBytes {
+		return Config{}, fmt.Errorf("MAX_ROUTE_PAYLOAD_BYTES may not exceed %d", application.MaxPayloadBytes)
 	}
-	if c.MaxPreviewBytes, err = int64Value(lookup, "MAX_PREVIEW_BYTES", 262144); err != nil {
+	if c.Limits.MaxPreviewBytes, err = int64Value(lookup, "MAX_PREVIEW_BYTES", c.Limits.MaxPreviewBytes); err != nil {
 		return Config{}, err
 	}
-	if c.MaxCSVRows, err = intValue(lookup, "MAX_CSV_ROWS", 500); err != nil {
+	if c.Limits.MaxCSVRows, err = intValue(lookup, "MAX_CSV_ROWS", c.Limits.MaxCSVRows); err != nil {
 		return Config{}, err
 	}
-	if c.TransferTTL, err = durationValue(lookup, "TRANSFER_TTL", 24*time.Hour); err != nil {
+	if c.Limits.TransferTTL, err = durationValue(lookup, "TRANSFER_TTL", c.Limits.TransferTTL); err != nil {
 		return Config{}, err
 	}
-	if c.ChatHistoryMessages, err = intValue(lookup, "CHAT_HISTORY_MESSAGES", 20); err != nil {
+	if c.Limits.ChatHistoryMessages, err = intValue(lookup, "CHAT_HISTORY_MESSAGES", c.Limits.ChatHistoryMessages); err != nil {
 		return Config{}, err
 	}
-	if c.ChatMaxOutputTokens, err = intValue(lookup, "CHAT_MAX_OUTPUT_TOKENS", 600); err != nil {
+	if c.Limits.ChatMaxOutputTokens, err = intValue(lookup, "CHAT_MAX_OUTPUT_TOKENS", c.Limits.ChatMaxOutputTokens); err != nil {
 		return Config{}, err
 	}
+	c.Limits = c.Limits.WithDefaults()
 	if c.ChatDisabled, err = boolValue(lookup, "CHAT_DISABLED", false); err != nil {
 		return Config{}, err
 	}

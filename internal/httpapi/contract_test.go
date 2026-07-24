@@ -20,10 +20,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 	"secure-brain/internal/store"
 )
@@ -108,20 +108,18 @@ func routeTarget(pattern string) string {
 func newContractRouter(db *store.Store) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return New(db, nil, Options{
-		SessionSecret:        []byte(contractSessionSecret),
-		FrontendOrigin:       contractFrontendOrigin,
-		Logger:               logger,
-		MaxFileBytes:         10 << 20,
-		MaxPreviewBytes:      256 << 10,
-		MaxCSVRows:           500,
-		MaxRoutePayloadBytes: 25 << 20,
-		MaxRouteHops:         20,
-		TransferTTL:          24 * time.Hour,
-		ChatModel:            "contract-model",
-		ChatHistoryMessages:  20,
-		ChatMaxOutputTokens:  600,
-		ChatDisabled:         true,
+		SessionSecret:  []byte(contractSessionSecret),
+		FrontendOrigin: contractFrontendOrigin,
+		Logger:         logger,
+		Limits:         application.DefaultLimits(),
+		ChatModel:      "contract-model",
+		ChatDisabled:   true,
 	})
+}
+
+func contractMiddleware(next http.Handler) http.Handler {
+	clock := application.SystemClock{}
+	return withMiddleware(next, slog.New(slog.NewTextHandler(io.Discard, nil)), contractFrontendOrigin, clock, application.RandomIDGenerator{Clock: clock}, application.DefaultLimits())
 }
 
 func contractRequest(handler http.Handler, method, target string, body []byte, headers http.Header, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -450,7 +448,7 @@ func TestAuthenticationContractThroughRealRouter(t *testing.T) {
 
 func TestJSONRequestContractThroughRealRouter(t *testing.T) {
 	handler := newContractRouter(nil)
-	tooLarge := append([]byte(`{"user_id":"`), bytes.Repeat([]byte("a"), maxJSONBody)...)
+	tooLarge := append([]byte(`{"user_id":"`), bytes.Repeat([]byte("a"), int(application.DefaultLimits().MaxJSONBodyBytes))...)
 	tooLarge = append(tooLarge, []byte(`"}`)...)
 	tests := []struct {
 		name    string
@@ -487,9 +485,9 @@ func TestEnvelopeJSONOmittedNullEmptyAndOrderContract(t *testing.T) {
 		Empty   []string `json:"empty"`
 		Ordered []string `json:"ordered"`
 	}
-	handler := withMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := contractMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeData(w, r, http.StatusOK, shape{Empty: []string{}, Ordered: []string{"first", "second"}})
-	}), slog.New(slog.NewTextHandler(io.Discard, nil)), contractFrontendOrigin)
+	}))
 	response := contractRequest(handler, http.MethodGet, "/contract", nil, nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -541,9 +539,9 @@ func TestStatusAndUnknownDatabaseErrorContract(t *testing.T) {
 	}
 
 	mapped := databaseError(errors.New("database detail that must not escape"))
-	handler := withMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := contractMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, mapped)
-	}), slog.New(slog.NewTextHandler(io.Discard, nil)), contractFrontendOrigin)
+	}))
 	response := contractRequest(handler, http.MethodGet, "/contract", nil, nil)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
@@ -582,7 +580,7 @@ func TestPanicResponseRecorderContract(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler := withMiddleware(test.handler, slog.New(slog.NewTextHandler(io.Discard, nil)), contractFrontendOrigin)
+			handler := contractMiddleware(test.handler)
 			response := contractRequest(handler, http.MethodGet, "/contract", nil, nil)
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d", response.Code, test.status)

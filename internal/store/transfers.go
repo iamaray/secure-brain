@@ -62,7 +62,7 @@ func (s *Store) GetTransfer(ctx context.Context, transferID domain.RecordID) (do
 
 func (s *Store) ListTransfers(ctx context.Context, filter application.TransferQuery) ([]domain.Transfer, error) {
 	if filter.Limit <= 0 {
-		filter.Limit = 50
+		filter.Limit = application.DefaultLimits().DefaultPageSize
 	}
 	var query string
 	switch filter.Direction {

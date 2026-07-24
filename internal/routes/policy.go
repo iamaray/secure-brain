@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
-
-const DefaultMaxRouteHops = 20
 
 type FieldError struct {
 	Field   string `json:"field"`
@@ -136,8 +135,8 @@ func ValidateConfiguration(cfg Configuration, ctx ValidationContext) []FieldErro
 	}
 	if cfg.Route != nil {
 		maxHops := ctx.MaxHops
-		if maxHops <= 0 || maxHops > DefaultMaxRouteHops {
-			maxHops = DefaultMaxRouteHops
+		if maxHops <= 0 || maxHops > application.MaxRouteHops {
+			maxHops = application.MaxRouteHops
 		}
 		if len(cfg.Route.ServiceHops) > maxHops {
 			add("route.service_hops", "too_long", fmt.Sprintf("Route cannot contain more than %d Service hops.", maxHops))
@@ -293,8 +292,8 @@ func Authorize(in AuthorizationInput) (domain.BrainID, error) {
 		return "", domain.NewError(domain.CodeNodeNotFound, "The initiating Brain is not registered.")
 	}
 	maxHops := in.MaxHops
-	if maxHops <= 0 || maxHops > DefaultMaxRouteHops {
-		maxHops = DefaultMaxRouteHops
+	if maxHops <= 0 || maxHops > application.MaxRouteHops {
+		maxHops = application.MaxRouteHops
 	}
 	if len(in.ServiceHops) > maxHops {
 		return "", domain.NewError(domain.CodeRouteTooLong, "The saved route exceeds the configured Service-hop limit.")
