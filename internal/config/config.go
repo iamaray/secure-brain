@@ -105,7 +105,8 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 	if c.MaxPreviewBytes, err = int64Value(lookup, "MAX_PREVIEW_BYTES", 262144); err != nil {
 		return Config{}, err
 	}
-	
+	if c.MaxCSVRows, err = intValue(lookup, "MAX_CSV_ROWS", 500); err != nil {
+		return Config{}, err
 	}
 	if c.TransferTTL, err = durationValue(lookup, "TRANSFER_TTL", 24*time.Hour); err != nil {
 		return Config{}, err

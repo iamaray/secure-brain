@@ -54,8 +54,10 @@ dependency check. Run `./scripts/codebase-metrics.sh` at coherent refactor
 boundaries to report production/test line counts, import edges, untyped maps,
 discarded results, direct HTTP adapter imports, and oversized functions.
 
-Store integration tests use `DATABASE_TEST_URL` when supplied and otherwise skip with a clear message. Use a disposable database initialized with `db/schema.sql`.
-
+Store integration tests use `DATABASE_TEST_URL` when supplied and otherwise skip
+with a clear message. The configured PostgreSQL user must have `CREATEDB`; the
+suite creates a uniquely named database, initializes it from `db/schema.sql`, and
+drops it after the run. Never point this variable at a production server.
 
 ## Minimal API walkthrough
 
