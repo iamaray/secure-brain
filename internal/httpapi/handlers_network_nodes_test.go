@@ -107,12 +107,10 @@ func TestAddNetworkNodeHTTPIntegration(t *testing.T) {
 		t.Fatalf("list seeded Services: %v", err)
 	}
 	user, service := users[0], services[0]
-	api := &API{store: db, networkCanvas: newNetworkCanvasState()}
+	handler := newContractRouter(db)
+	sessionCookie := signInContractUser(t, handler, user.ID)
 	body, _ := json.Marshal(map[string]string{"node_id": service.CanonicalID})
-	req := httptest.NewRequest(http.MethodPost, "/api/network/nodes", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), userKey, user))
-	response := httptest.NewRecorder()
-	api.addNetworkNode(response, req)
+	response := contractRequest(handler, http.MethodPost, "/api/network/nodes", body, http.Header{"Content-Type": {"application/json"}}, sessionCookie)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
 	}
@@ -147,12 +145,7 @@ func TestAddNetworkNodeHTTPIntegration(t *testing.T) {
 	}
 
 	remove := func(nodeID string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodDelete, "/api/network/nodes/"+nodeID, nil)
-		req.SetPathValue("nodeId", nodeID)
-		req = req.WithContext(context.WithValue(req.Context(), userKey, user))
-		response := httptest.NewRecorder()
-		api.removeNetworkNode(response, req)
-		return response
+		return contractRequest(handler, http.MethodDelete, "/api/network/nodes/"+nodeID, nil, nil, sessionCookie)
 	}
 	if response := remove(ownedBrain.CanonicalID); response.Code != http.StatusForbidden {
 		t.Fatalf("owned DELETE status = %d body=%s", response.Code, response.Body.String())
@@ -160,15 +153,36 @@ func TestAddNetworkNodeHTTPIntegration(t *testing.T) {
 	if response := remove(nonOwnedBrain.CanonicalID); response.Code != http.StatusNoContent {
 		t.Fatalf("non-owned DELETE status = %d body=%s", response.Code, response.Body.String())
 	}
-	if api.networkCanvas.onCanvas(user.ID, "brain", nonOwnedBrain.CanonicalID) {
-		t.Fatal("non-owned DELETE did not hide the Brain")
+	if onCanvas := searchResultOnCanvas(t, handler, sessionCookie, nonOwnedBrain.CanonicalID); onCanvas {
+		t.Fatal("non-owned DELETE left the Brain on the canvas")
 	}
 	restoreBody, _ := json.Marshal(map[string]string{"node_id": nonOwnedBrain.CanonicalID})
-	restoreReq := httptest.NewRequest(http.MethodPost, "/api/network/nodes", bytes.NewReader(restoreBody))
-	restoreReq = restoreReq.WithContext(context.WithValue(restoreReq.Context(), userKey, user))
-	restored := httptest.NewRecorder()
-	api.addNetworkNode(restored, restoreReq)
-	if restored.Code != http.StatusOK || !api.networkCanvas.onCanvas(user.ID, "brain", nonOwnedBrain.CanonicalID) {
+	restored := contractRequest(handler, http.MethodPost, "/api/network/nodes", restoreBody, http.Header{"Content-Type": {"application/json"}}, sessionCookie)
+	if restored.Code != http.StatusOK || !searchResultOnCanvas(t, handler, sessionCookie, nonOwnedBrain.CanonicalID) {
 		t.Fatalf("restore status = %d body=%s", restored.Code, restored.Body.String())
 	}
+}
+
+func searchResultOnCanvas(t *testing.T, handler http.Handler, sessionCookie *http.Cookie, nodeID string) bool {
+	t.Helper()
+	response := contractRequest(handler, http.MethodGet, "/api/network/search?q="+nodeID, nil, nil, sessionCookie)
+	if response.Code != http.StatusOK {
+		t.Fatalf("network search status = %d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data []struct {
+			ID       string `json:"id"`
+			OnCanvas bool   `json:"on_canvas"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode network search: %v body=%s", err, response.Body.String())
+	}
+	for _, node := range envelope.Data {
+		if node.ID == nodeID {
+			return node.OnCanvas
+		}
+	}
+	t.Fatalf("network search omitted %q", nodeID)
+	return false
 }
