@@ -1,0 +1,1 @@
+{"operation":"text_search","query":"hit","matches":[{"asset_id":"a","filename":"a.txt","line_number":2,"context":"Hit here"}],"match_count":1,"truncated":false,"skipped":[{"asset_id":"b","reason":"incompatible_format_or_state"}]}

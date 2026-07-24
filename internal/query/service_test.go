@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,6 +27,66 @@ func errorCode(t *testing.T, err error) domain.Code {
 		t.Fatalf("expected domain error, got %T: %v", err, err)
 	}
 	return appErr.Code
+}
+
+func TestExecuteCoreOperationsGolden(t *testing.T) {
+	tests := []struct {
+		name   string
+		assets []Asset
+		req    Request
+		file   string
+	}{
+		{
+			name: "raw read",
+			assets: []Asset{
+				asset("a", "a.txt", domain.AssetFormatText, domain.AssetStateReady, "A"),
+				func() Asset {
+					value := asset("b", "rows.csv", domain.AssetFormatCSV, domain.AssetStateReady, "x\n1\n")
+					value.Asset.MediaType = "text/csv"
+					return value
+				}(),
+			},
+			req:  Request{Operation: OperationRawRead},
+			file: "testdata/raw_read.golden.json",
+		},
+		{
+			name: "text search",
+			assets: []Asset{
+				asset("a", "a.txt", domain.AssetFormatText, domain.AssetStateReady, "zero\nHit here\n"),
+				asset("b", "blob.bin", domain.AssetFormatBinary, domain.AssetStateReady, "hit"),
+			},
+			req:  Request{Operation: OperationTextSearch, Query: "hit"},
+			file: "testdata/text_search.golden.json",
+		},
+		{
+			name: "CSV query",
+			assets: []Asset{
+				asset("scores", "scores.csv", domain.AssetFormatCSV, domain.AssetStateReady, "name,score\nAda,2\nBob,1\n"),
+			},
+			req: Request{
+				Operation: OperationCSVQuery,
+				Select:    []string{"name"},
+				Filters:   []Filter{{Column: "score", Operator: ">", Value: "1"}},
+				Limit:     10,
+			},
+			file: "testdata/csv_query.golden.json",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := Execute(tt.assets, tt.req, Limits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := os.ReadFile(tt.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(payload.Bytes)); got != strings.TrimSpace(string(want)) {
+				t.Fatalf("golden payload mismatch\n got: %s\nwant: %s", got, want)
+			}
+		})
+	}
 }
 
 func TestRawReadSinglePreservesOriginalPayload(t *testing.T) {

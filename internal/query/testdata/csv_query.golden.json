@@ -1,0 +1,1 @@
+{"operation":"csv_query","files":[{"asset_id":"scores","filename":"scores.csv","columns":["name"],"rows":[["Ada"]],"returned_row_count":1,"matched_row_count":1,"has_more":false}],"skipped":[]}
