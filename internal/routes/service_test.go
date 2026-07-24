@@ -32,7 +32,7 @@ type recordingExecutor struct {
 }
 
 func (e *recordingExecutor) Execute(_ context.Context, service domain.Service, in domain.Payload) (domain.Payload, error) {
-	e.calls = append(e.calls, service.CanonicalID)
+	e.calls = append(e.calls, string(service.CanonicalID))
 	if e.fn == nil {
 		return in, nil
 	}

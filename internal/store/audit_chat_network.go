@@ -57,7 +57,7 @@ func (s *Store) InsertAuditEvent(ctx context.Context, input AuditEventInput) (do
 	return event, nil
 }
 
-func (s *Store) ListAuditEvents(ctx context.Context, viewerUserID string, filter AuditFilter) ([]domain.AuditEvent, error) {
+func (s *Store) ListAuditEvents(ctx context.Context, viewerUserID domain.RecordID, filter AuditFilter) ([]domain.AuditEvent, error) {
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -101,7 +101,7 @@ func scanChatMessage(row interface{ Scan(...any) error }) (domain.ChatMessage, e
 	return message, err
 }
 
-func (s *Store) ListChatMessages(ctx context.Context, brainID, userID string, limit int) ([]domain.ChatMessage, error) {
+func (s *Store) ListChatMessages(ctx context.Context, brainID, userID domain.RecordID, limit int) ([]domain.ChatMessage, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -139,7 +139,7 @@ func (s *Store) ListChatMessages(ctx context.Context, brainID, userID string, li
 }
 
 // InsertChatPair inserts the user and assistant messages atomically.
-func (s *Store) InsertChatPair(ctx context.Context, brainID, userID, userContent, assistantContent, model string) ([]domain.ChatMessage, error) {
+func (s *Store) InsertChatPair(ctx context.Context, brainID, userID domain.RecordID, userContent, assistantContent, model string) ([]domain.ChatMessage, error) {
 	var messages []domain.ChatMessage
 	err := s.withinTx(ctx, func(tx *Store) error {
 		userMessage, err := scanChatMessage(tx.db.QueryRow(ctx, `
@@ -164,7 +164,7 @@ func (s *Store) InsertChatPair(ctx context.Context, brainID, userID, userContent
 	return messages, err
 }
 
-func (s *Store) ClearChat(ctx context.Context, brainID, userID string) (int64, error) {
+func (s *Store) ClearChat(ctx context.Context, brainID, userID domain.RecordID) (int64, error) {
 	tag, err := s.db.Exec(ctx, `delete from public.chat_messages where brain_id = $1 and user_id = $2`, brainID, userID)
 	if err != nil {
 		return 0, fmt.Errorf("clear chat: %w", err)
@@ -203,7 +203,12 @@ func (s *Store) ListNetworkRoutes(ctx context.Context) ([]NetworkRoute, error) {
 		}
 		route.Operations = make([]domain.Operation, len(operations))
 		for i := range operations {
-			route.Operations[i] = domain.Operation(operations[i])
+			operation, parseErr := domain.ParseOperation(operations[i])
+			if parseErr != nil {
+				rows.Close()
+				return nil, fmt.Errorf("list network route operation: %w", parseErr)
+			}
+			route.Operations[i] = operation
 		}
 		routes = append(routes, route)
 	}
@@ -224,7 +229,7 @@ func (s *Store) ListNetworkRoutes(ctx context.Context) ([]NetworkRoute, error) {
 			return nil, fmt.Errorf("list network route grant owners: %w", err)
 		}
 		for ownerRows.Next() {
-			var userID string
+			var userID domain.RecordID
 			if err := ownerRows.Scan(&userID); err != nil {
 				ownerRows.Close()
 				return nil, fmt.Errorf("list network route grant owner scan: %w", err)

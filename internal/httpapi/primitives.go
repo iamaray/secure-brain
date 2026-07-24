@@ -108,6 +108,24 @@ func requestID(ctx context.Context) string {
 	return "req_unknown"
 }
 
+// recordIDAtBoundary centralizes translation for legacy endpoints whose exact
+// not-found or database-error mapping still owns malformed-ID behavior.
+func recordIDAtBoundary(value string) domain.RecordID {
+	id, err := domain.ParseRecordID(value)
+	if err == nil {
+		return id
+	}
+	return domain.RecordID(value)
+}
+
+func principalAtBoundary(value string) domain.Principal {
+	principal, err := domain.ParsePrincipal(value)
+	if err == nil {
+		return principal
+	}
+	return domain.Principal(value)
+}
+
 func newRequestID() string {
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {

@@ -51,7 +51,7 @@ func (s *Store) InsertTransfer(ctx context.Context, input TransferInput) (domain
 	return transfer, nil
 }
 
-func (s *Store) GetTransfer(ctx context.Context, transferID string) (domain.Transfer, error) {
+func (s *Store) GetTransfer(ctx context.Context, transferID domain.RecordID) (domain.Transfer, error) {
 	transfer, err := scanTransfer(s.db.QueryRow(ctx, `select `+transferColumns+` from public.transfers where id = $1`, transferID))
 	if err != nil {
 		return domain.Transfer{}, fmt.Errorf("get transfer: %w", err)
@@ -100,7 +100,7 @@ func (s *Store) ListTransfers(ctx context.Context, filter TransferFilter) ([]dom
 }
 
 // LockTransfer must be called on the Store supplied to an InTx callback.
-func (s *Store) LockTransfer(ctx context.Context, transferID string) (domain.Transfer, error) {
+func (s *Store) LockTransfer(ctx context.Context, transferID domain.RecordID) (domain.Transfer, error) {
 	if _, ok := s.db.(pgx.Tx); !ok {
 		return domain.Transfer{}, ErrTransactionRequired
 	}
@@ -113,7 +113,7 @@ func (s *Store) LockTransfer(ctx context.Context, transferID string) (domain.Tra
 	return transfer, nil
 }
 
-func (s *Store) MarkTransferAccepted(ctx context.Context, transferID, acceptedAssetID string, resolvedAt time.Time) (domain.Transfer, error) {
+func (s *Store) MarkTransferAccepted(ctx context.Context, transferID, acceptedAssetID domain.RecordID, resolvedAt time.Time) (domain.Transfer, error) {
 	transfer, err := scanTransfer(s.db.QueryRow(ctx, `
 		update public.transfers
 		set status = 'accepted', accepted_asset_id = $2, resolved_at = $3
@@ -126,15 +126,15 @@ func (s *Store) MarkTransferAccepted(ctx context.Context, transferID, acceptedAs
 	return transfer, nil
 }
 
-func (s *Store) MarkTransferRejected(ctx context.Context, transferID string, resolvedAt time.Time) (domain.Transfer, error) {
+func (s *Store) MarkTransferRejected(ctx context.Context, transferID domain.RecordID, resolvedAt time.Time) (domain.Transfer, error) {
 	return s.markTransferTerminal(ctx, transferID, domain.TransferStatusRejected, resolvedAt)
 }
 
-func (s *Store) MarkTransferExpired(ctx context.Context, transferID string, resolvedAt time.Time) (domain.Transfer, error) {
+func (s *Store) MarkTransferExpired(ctx context.Context, transferID domain.RecordID, resolvedAt time.Time) (domain.Transfer, error) {
 	return s.markTransferTerminal(ctx, transferID, domain.TransferStatusExpired, resolvedAt)
 }
 
-func (s *Store) markTransferTerminal(ctx context.Context, transferID string, status domain.TransferStatus, resolvedAt time.Time) (domain.Transfer, error) {
+func (s *Store) markTransferTerminal(ctx context.Context, transferID domain.RecordID, status domain.TransferStatus, resolvedAt time.Time) (domain.Transfer, error) {
 	transfer, err := scanTransfer(s.db.QueryRow(ctx, `
 		update public.transfers
 		set status = $2, resolved_at = $3
@@ -174,7 +174,7 @@ func (s *Store) ExpirePendingTransfers(ctx context.Context, now time.Time) ([]do
 	return transfers, nil
 }
 
-func (s *Store) GetIdempotencyRecord(ctx context.Context, userID, scope, key string) (IdempotencyRecord, error) {
+func (s *Store) GetIdempotencyRecord(ctx context.Context, userID domain.RecordID, scope string, key domain.IdempotencyKey) (IdempotencyRecord, error) {
 	record, err := scanIdempotency(s.db.QueryRow(ctx, `
 		select id, user_id, scope, idempotency_key, request_hash,
 		       response_status, response_body, created_at, expires_at
@@ -196,7 +196,7 @@ func scanIdempotency(row interface{ Scan(...any) error }) (IdempotencyRecord, er
 	return record, err
 }
 
-func (s *Store) CreateIdempotencyRecord(ctx context.Context, userID, scope, key, requestHash string, expiresAt time.Time) (IdempotencyRecord, error) {
+func (s *Store) CreateIdempotencyRecord(ctx context.Context, userID domain.RecordID, scope string, key domain.IdempotencyKey, requestHash string, expiresAt time.Time) (IdempotencyRecord, error) {
 	record, err := scanIdempotency(s.db.QueryRow(ctx, `
 		insert into public.idempotency_records (
 			user_id, scope, idempotency_key, request_hash, expires_at
@@ -220,7 +220,7 @@ func (s *Store) CreateIdempotencyRecord(ctx context.Context, userID, scope, key,
 	return record, nil
 }
 
-func (s *Store) CompleteIdempotencyRecord(ctx context.Context, id string, responseStatus int, responseBody []byte) (IdempotencyRecord, error) {
+func (s *Store) CompleteIdempotencyRecord(ctx context.Context, id domain.RecordID, responseStatus int, responseBody []byte) (IdempotencyRecord, error) {
 	record, err := scanIdempotency(s.db.QueryRow(ctx, `
 		update public.idempotency_records
 		set response_status = $2, response_body = $3

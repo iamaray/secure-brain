@@ -48,7 +48,11 @@ type queryPathResponse struct {
 }
 
 func (a *API) ownerBrain(r *http.Request) (domain.Brain, error) {
-	brain, err := a.store.GetBrainByCanonicalID(r.Context(), r.PathValue("brainId"))
+	id, parseErr := domain.ParseBrainID(r.PathValue("brainId"))
+	brain, err := a.store.GetBrainByCanonicalID(r.Context(), id)
+	if parseErr != nil {
+		return domain.Brain{}, domain.NewError(domain.CodeNodeNotFound, "The Brain does not exist.")
+	}
 	if err != nil {
 		return domain.Brain{}, domain.NewError(domain.CodeNodeNotFound, "The Brain does not exist.")
 	}
@@ -102,9 +106,9 @@ func (a *API) createQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	a.audit(r, "query_path.created", "query_path", created.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": created.QueryPath.Path, "state": created.QueryPath.State, "config_version": created.QueryPath.ConfigVersion}, []string{brain.OwnerUserID})
+	a.audit(r, "query_path.created", "query_path", created.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": created.QueryPath.Path, "state": created.QueryPath.State, "config_version": created.QueryPath.ConfigVersion}, []domain.RecordID{brain.OwnerUserID})
 	if created.QueryPath.State == domain.QueryPathStateEnabled {
-		a.audit(r, "query_path.enabled", "query_path", created.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": created.QueryPath.Path}, []string{brain.OwnerUserID})
+		a.audit(r, "query_path.enabled", "query_path", created.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": created.QueryPath.Path}, []domain.RecordID{brain.OwnerUserID})
 	}
 	writeData(w, r, http.StatusCreated, response)
 }
@@ -115,7 +119,7 @@ func (a *API) getQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	config, err := a.store.LoadQueryPathConfig(r.Context(), r.PathValue("queryPathId"))
+	config, err := a.store.LoadQueryPathConfig(r.Context(), recordIDAtBoundary(r.PathValue("queryPathId")))
 	if err != nil || config.QueryPath.BrainID != brain.ID {
 		writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
 		return
@@ -139,7 +143,7 @@ func (a *API) patchQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	current, err := a.store.LoadQueryPathConfig(r.Context(), r.PathValue("queryPathId"))
+	current, err := a.store.LoadQueryPathConfig(r.Context(), recordIDAtBoundary(r.PathValue("queryPathId")))
 	if err != nil || current.QueryPath.BrainID != brain.ID {
 		writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
 		return
@@ -178,10 +182,10 @@ func (a *API) patchQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	a.audit(r, "query_path.updated", "query_path", updated.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": updated.QueryPath.Path, "state": updated.QueryPath.State, "config_version": updated.QueryPath.ConfigVersion}, []string{brain.OwnerUserID})
+	a.audit(r, "query_path.updated", "query_path", updated.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": updated.QueryPath.Path, "state": updated.QueryPath.State, "config_version": updated.QueryPath.ConfigVersion}, []domain.RecordID{brain.OwnerUserID})
 	if current.QueryPath.State != updated.QueryPath.State && (updated.QueryPath.State == domain.QueryPathStateEnabled || updated.QueryPath.State == domain.QueryPathStateDisabled) {
 		eventType := "query_path." + string(updated.QueryPath.State)
-		a.audit(r, eventType, "query_path", updated.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": updated.QueryPath.Path}, []string{brain.OwnerUserID})
+		a.audit(r, eventType, "query_path", updated.QueryPath.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"path": updated.QueryPath.Path}, []domain.RecordID{brain.OwnerUserID})
 	}
 	writeData(w, r, http.StatusOK, response)
 }
@@ -224,14 +228,15 @@ func (a *API) deleteQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if err := a.store.DeleteQueryPath(r.Context(), brain.ID, r.PathValue("queryPathId"), version); errors.Is(err, store.ErrVersionConflict) {
+	queryPathID := recordIDAtBoundary(r.PathValue("queryPathId"))
+	if err := a.store.DeleteQueryPath(r.Context(), brain.ID, queryPathID, version); errors.Is(err, store.ErrVersionConflict) {
 		writeError(w, r, domain.NewError(domain.CodeConfigVersionConflict, "The query path version does not match."))
 		return
 	} else if err != nil {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "query_path.deleted", "query_path", r.PathValue("queryPathId"), &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{}, []string{brain.OwnerUserID})
+	a.audit(r, "query_path.deleted", "query_path", queryPathID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{}, []domain.RecordID{brain.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -246,12 +251,13 @@ func (a *API) validateQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	_, fields, err := a.prepareQueryPath(r, brain, r.PathValue("queryPathId"), body)
+	queryPathID := recordIDAtBoundary(r.PathValue("queryPathId"))
+	_, fields, err := a.prepareQueryPath(r, brain, queryPathID, body)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	a.audit(r, "route.validated", "query_path", r.PathValue("queryPathId"), &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"valid": len(fields) == 0}, []string{brain.OwnerUserID})
+	a.audit(r, "route.validated", "query_path", queryPathID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"valid": len(fields) == 0}, []domain.RecordID{brain.OwnerUserID})
 	writeData(w, r, http.StatusOK, map[string]any{"valid": len(fields) == 0, "fields": fields})
 }
 
@@ -267,7 +273,7 @@ func ifMatchVersion(r *http.Request) (int64, error) {
 	return version, nil
 }
 
-func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID string, body queryPathRequest) (store.QueryPathConfigInput, []routes.FieldError, error) {
+func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID domain.RecordID, body queryPathRequest) (store.QueryPathConfigInput, []routes.FieldError, error) {
 	brains, err := a.store.ListBrains(r.Context(), nil)
 	if err != nil {
 		return store.QueryPathConfigInput{}, nil, databaseError(err)
@@ -282,23 +288,27 @@ func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID 
 	}
 	brainMap, serviceMap, existing := map[string]domain.Brain{}, map[string]domain.Service{}, map[string]string{}
 	for _, value := range brains {
-		brainMap[value.CanonicalID] = value
+		brainMap[string(value.CanonicalID)] = value
 	}
 	for _, value := range services {
-		serviceMap[value.CanonicalID] = value
+		serviceMap[string(value.CanonicalID)] = value
 	}
 	for _, value := range paths {
-		existing[value.Path] = value.ID
+		existing[string(value.Path)] = string(value.ID)
 	}
 	assetMap := make(map[string]domain.Asset, len(body.AssetIDs))
 	for _, id := range body.AssetIDs {
-		if asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, id); err == nil {
+		if asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, recordIDAtBoundary(id)); err == nil {
 			assetMap[id] = asset
 		}
 	}
-	cfg := routes.Configuration{QueryPathID: queryPathID, Path: body.Path, AssetIDs: body.AssetIDs, Operations: body.Operations, Visibility: body.Visibility, AllowedBrainIDs: body.AllowedBrainIDs, AllowedServiceIDs: body.AllowedServiceIDs, Route: body.Route, State: body.State}
+	cfg := routes.Configuration{QueryPathID: string(queryPathID), Path: body.Path, AssetIDs: body.AssetIDs, Operations: body.Operations, Visibility: body.Visibility, AllowedBrainIDs: body.AllowedBrainIDs, AllowedServiceIDs: body.AllowedServiceIDs, Route: body.Route, State: body.State}
 	fields := routes.ValidateConfiguration(cfg, routes.ValidationContext{ActorUserID: activeUser(r.Context()).ID, SourceBrain: brain, Assets: assetMap, Brains: brainMap, Services: serviceMap, ExistingPaths: existing, MaxHops: a.maxRouteHops})
-	input := store.QueryPathConfigInput{BrainID: brain.ID, Path: body.Path, Visibility: body.Visibility, State: body.State, Operations: body.Operations, AssetIDs: body.AssetIDs}
+	pathValue, _ := domain.ParseQueryPath(body.Path)
+	input := store.QueryPathConfigInput{BrainID: brain.ID, Path: pathValue, Visibility: body.Visibility, State: body.State, Operations: body.Operations}
+	for _, id := range body.AssetIDs {
+		input.AssetIDs = append(input.AssetIDs, recordIDAtBoundary(id))
+	}
 	for _, id := range body.AllowedBrainIDs {
 		if value, ok := brainMap[id]; ok {
 			input.AllowedBrainIDs = append(input.AllowedBrainIDs, value.ID)
@@ -311,7 +321,7 @@ func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID 
 	}
 	if body.Route != nil {
 		routeInput := &store.RouteInput{}
-		if body.Route.Terminal == "caller" {
+		if body.Route.Terminal == string(domain.TerminalModeCaller) {
 			routeInput.TerminalMode = domain.TerminalModeCaller
 		} else if value, ok := brainMap[body.Route.Terminal]; ok {
 			routeInput.TerminalMode = domain.TerminalModeFixed
@@ -328,33 +338,34 @@ func (a *API) prepareQueryPath(r *http.Request, brain domain.Brain, queryPathID 
 }
 
 func (a *API) queryPathResponse(r *http.Request, config store.QueryPathConfig) (queryPathResponse, error) {
-	response := queryPathResponse{ID: config.QueryPath.ID, BrainID: config.QueryPath.BrainID, Path: config.QueryPath.Path, Operations: config.QueryPath.Operations, Visibility: config.QueryPath.Visibility, State: config.QueryPath.State, ConfigVersion: config.QueryPath.ConfigVersion, AssetIDs: []string{}, AllowedBrainIDs: []string{}, AllowedServiceIDs: []string{}}
+	response := queryPathResponse{ID: string(config.QueryPath.ID), BrainID: string(config.QueryPath.BrainID), Path: string(config.QueryPath.Path), Operations: config.QueryPath.Operations, Visibility: config.QueryPath.Visibility, State: config.QueryPath.State, ConfigVersion: config.QueryPath.ConfigVersion, AssetIDs: []string{}, AllowedBrainIDs: []string{}, AllowedServiceIDs: []string{}}
 	for _, asset := range config.Assets {
-		response.AssetIDs = append(response.AssetIDs, asset.ID)
+		response.AssetIDs = append(response.AssetIDs, string(asset.ID))
 	}
 	for _, brain := range config.AllowedBrains {
-		response.AllowedBrainIDs = append(response.AllowedBrainIDs, brain.CanonicalID)
+		response.AllowedBrainIDs = append(response.AllowedBrainIDs, string(brain.CanonicalID))
 	}
 	for _, service := range config.AllowedServices {
-		response.AllowedServiceIDs = append(response.AllowedServiceIDs, service.CanonicalID)
+		response.AllowedServiceIDs = append(response.AllowedServiceIDs, string(service.CanonicalID))
 	}
 	if config.Route != nil {
-		route := &routes.RouteConfig{ServiceHops: []string{}, Terminal: "caller"}
+		route := &routes.RouteConfig{ServiceHops: []string{}, Terminal: string(domain.TerminalModeCaller)}
 		if config.Route.TerminalMode == domain.TerminalModeFixed && config.Route.DestinationBrainID != nil {
 			brain, err := a.store.GetBrain(r.Context(), *config.Route.DestinationBrainID)
 			if err != nil {
 				return queryPathResponse{}, databaseError(err)
 			}
-			route.Terminal = brain.CanonicalID
+			route.Terminal = string(brain.CanonicalID)
 		}
 		for _, hop := range config.Hops {
 			service, err := a.store.GetService(r.Context(), hop.ServiceID)
 			if err != nil {
 				return queryPathResponse{}, databaseError(err)
 			}
-			route.ServiceHops = append(route.ServiceHops, service.CanonicalID)
+			route.ServiceHops = append(route.ServiceHops, string(service.CanonicalID))
 		}
-		response.Route, response.RouteID = route, &config.Route.ID
+		routeID := string(config.Route.ID)
+		response.Route, response.RouteID = route, &routeID
 	}
 	return response, nil
 }

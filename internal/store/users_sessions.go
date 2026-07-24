@@ -32,7 +32,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
 	return users, nil
 }
 
-func (s *Store) GetUser(ctx context.Context, id string) (domain.User, error) {
+func (s *Store) GetUser(ctx context.Context, id domain.RecordID) (domain.User, error) {
 	var user domain.User
 	err := s.db.QueryRow(ctx, `
 		select id, handle, display_name, created_at
@@ -45,7 +45,7 @@ func (s *Store) GetUser(ctx context.Context, id string) (domain.User, error) {
 	return user, nil
 }
 
-func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID string, expiresAt time.Time) (Session, error) {
+func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID domain.RecordID, expiresAt time.Time) (Session, error) {
 	var session Session
 	err := s.db.QueryRow(ctx, `
 		insert into public.mock_sessions (token_hash, user_id, expires_at)
@@ -83,7 +83,7 @@ func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (Se
 
 // TouchSession updates last_seen_at only when the previous value is at least a
 // minute old. The returned boolean reports whether an update occurred.
-func (s *Store) TouchSession(ctx context.Context, id string, now time.Time) (bool, error) {
+func (s *Store) TouchSession(ctx context.Context, id domain.RecordID, now time.Time) (bool, error) {
 	tag, err := s.db.Exec(ctx, `
 		update public.mock_sessions
 		set last_seen_at = $2

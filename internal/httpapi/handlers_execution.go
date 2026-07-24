@@ -32,10 +32,14 @@ func (a *API) pullQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	sourceID := r.PathValue("sourceBrainId")
-	path := "/" + strings.TrimPrefix(r.PathValue("queryPath"), "/")
+	sourceID, parseErr := domain.ParseBrainID(r.PathValue("sourceBrainId"))
+	path, pathErr := domain.ParseQueryPath("/" + strings.TrimPrefix(r.PathValue("queryPath"), "/"))
+	if parseErr != nil || pathErr != nil {
+		writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
+		return
+	}
 	config, err := a.store.ResolveEnabledQueryPath(r.Context(), sourceID, path)
-	if err != nil {
+	if parseErr != nil || err != nil {
 		writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
 		return
 	}
@@ -44,8 +48,9 @@ func (a *API) pullQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
 		return
 	}
-	initiator, err := a.store.GetBrainByCanonicalID(r.Context(), body.InitiatingBrainID)
-	if err != nil {
+	initiatorID, parseErr := domain.ParseBrainID(body.InitiatingBrainID)
+	initiator, err := a.store.GetBrainByCanonicalID(r.Context(), initiatorID)
+	if parseErr != nil || err != nil {
 		if config.QueryPath.Visibility == domain.VisibilityPrivate && source.OwnerUserID != activeUser(r.Context()).ID {
 			writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
 			return
@@ -72,7 +77,7 @@ func (a *API) sendQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	config, err := a.store.LoadQueryPathConfig(r.Context(), r.PathValue("queryPathId"))
+	config, err := a.store.LoadQueryPathConfig(r.Context(), recordIDAtBoundary(r.PathValue("queryPathId")))
 	if err != nil || config.QueryPath.BrainID != brain.ID {
 		writeError(w, r, domain.NewError(domain.CodePathNotFound, "The query path does not exist."))
 		return
@@ -94,7 +99,7 @@ func (a *API) sendQueryPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestBytes, _ := json.Marshal(body)
-	record, replay, err := a.startIdempotency(r, "send:"+config.QueryPath.ID, key, requestBytes)
+	record, replay, err := a.startIdempotency(r, "send:"+string(config.QueryPath.ID), key, requestBytes)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -122,7 +127,7 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 	}
 	allowedOperation := false
 	for _, operation := range config.QueryPath.Operations {
-		if string(operation) == request.Operation {
+		if operation == request.Operation {
 			allowedOperation = true
 			break
 		}
@@ -131,7 +136,7 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 		return nil, domain.NewError(domain.CodeOperationNotAllowed, "The operation is not enabled on this query path.")
 	}
 	services := make([]domain.Service, 0, len(config.Hops))
-	serviceIDs := make([]string, 0, len(config.Hops))
+	serviceIDs := make([]domain.ServiceID, 0, len(config.Hops))
 	for _, hop := range config.Hops {
 		service, err := a.store.GetService(r.Context(), hop.ServiceID)
 		if err != nil || service.Status != domain.NodeStatusReady {
@@ -139,7 +144,7 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 		}
 		services, serviceIDs = append(services, service), append(serviceIDs, service.CanonicalID)
 	}
-	terminal := "caller"
+	terminal := string(domain.TerminalModeCaller)
 	var destination domain.Brain
 	if config.Route.TerminalMode == domain.TerminalModeFixed {
 		if config.Route.DestinationBrainID == nil {
@@ -149,11 +154,11 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 		if err != nil {
 			return nil, domain.NewError(domain.CodeRouteInvalid, "The route destination is unavailable.")
 		}
-		destination, terminal = value, value.CanonicalID
+		destination, terminal = value, string(value.CanonicalID)
 	} else {
 		destination = initiator
 	}
-	brainGrants, serviceGrants := []string{}, []string{}
+	brainGrants, serviceGrants := []domain.BrainID{}, []domain.ServiceID{}
 	for _, brain := range config.AllowedBrains {
 		brainGrants = append(brainGrants, brain.CanonicalID)
 	}
@@ -165,22 +170,22 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 	now := a.now().UTC()
 	actorID, initiatorID, sourceID, destinationID, queryPathID := activeUser(r.Context()).ID, initiator.ID, source.ID, destination.ID, config.QueryPath.ID
 	destinationCanonical := destination.CanonicalID
-	execution, err := a.store.InsertExecution(r.Context(), store.ExecutionInput{ID: newUUID(), Mode: mode, QueryPathID: &queryPathID, ActorUserID: &actorID, InitiatingBrainID: &initiatorID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, SourcePath: config.QueryPath.Path, DestinationCanonicalID: &destinationCanonical, Operation: domain.Operation(request.Operation), State: domain.ExecutionStateAuthorizing, RouteSnapshot: snapshotBytes, ResultMetadata: json.RawMessage(`{}`)})
+	execution, err := a.store.InsertExecution(r.Context(), store.ExecutionInput{ID: newUUID(), Mode: mode, QueryPathID: &queryPathID, ActorUserID: &actorID, InitiatingBrainID: &initiatorID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, SourcePath: config.QueryPath.Path, DestinationCanonicalID: &destinationCanonical, Operation: request.Operation, State: domain.ExecutionStateAuthorizing, RouteSnapshot: snapshotBytes, ResultMetadata: json.RawMessage(`{}`)})
 	if err != nil {
 		return nil, databaseError(err)
 	}
 	viewers := executionViewers(source, destination, services, actorID)
-	a.audit(r, "route.execution_started", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, map[string]any{"mode": mode, "operation": request.Operation}, []string{source.OwnerUserID})
+	a.audit(r, "route.execution_started", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, map[string]any{"mode": mode, "operation": request.Operation}, []domain.RecordID{source.OwnerUserID})
 	_, authErr := routes.Authorize(routes.AuthorizationInput{Mode: mode, Visibility: config.QueryPath.Visibility, SourceBrainID: source.CanonicalID, InitiatingBrainID: initiator.CanonicalID, InitiatorOwned: initiator.OwnerUserID == actorID, InitiatorRegistered: true, Terminal: terminal, BrainGrants: brainGrants, ServiceGrants: serviceGrants, ServiceHops: serviceIDs, MaxHops: a.maxRouteHops})
 	if authErr != nil {
 		code := errorCode(authErr)
 		message := "Route authorization was denied."
 		completed := a.now().UTC()
-		_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateFailed, ErrorCode: &code, ErrorMessage: &message, CompletedAt: &completed})
-		a.audit(r, "route.authorization_denied", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusDenied, map[string]any{"error_code": code}, []string{source.OwnerUserID})
+		_, _ = a.store.TransitionExecution(r.Context(), execution.ID, domain.FailExecution(code, message, completed))
+		a.audit(r, "route.authorization_denied", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusDenied, map[string]any{"error_code": code}, []domain.RecordID{source.OwnerUserID})
 		return nil, authErr
 	}
-	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateReading, StartedAt: &now})
+	_, _ = a.store.TransitionExecution(r.Context(), execution.ID, domain.BeginExecutionRead(now))
 	loaded := make([]query.Asset, 0, len(config.Assets))
 	total := 0
 	for _, asset := range config.Assets {
@@ -214,7 +219,7 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 	if err != nil {
 		return nil, a.failExecution(r, execution.ID, source.ID, viewers, errorCode(err), safeErrorMessage(err))
 	}
-	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateProcessing, StartedAt: &now})
+	_, _ = a.store.TransitionExecution(r.Context(), execution.ID, domain.BeginExecutionProcessing(now))
 	output, hops, err := routes.ExecuteHops(r.Context(), routes.IdentityServiceExecutor{}, services, payload)
 	for _, hop := range hops {
 		serviceID, errorCodeValue := hop.ServiceID, (*domain.Code)(nil)
@@ -241,21 +246,21 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 		if err := a.objects.Put(r.Context(), storagePath, output.MediaType, bytes.NewReader(output.Bytes), int64(len(output.Bytes)), false); err != nil {
 			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeStorageProviderError, "The transfer payload could not be stored.")
 		}
-		suggestedKey := "inbox/" + filepath.Base(output.SuggestedFilename)
-		if strings.TrimSuffix(suggestedKey, "inbox/") == "" {
-			suggestedKey = "inbox/transfer.json"
+		suggestedKey, _ := domain.ParseObjectKey("inbox/" + filepath.Base(output.SuggestedFilename))
+		if strings.TrimSuffix(string(suggestedKey), "inbox/") == "" {
+			suggestedKey, _ = domain.ParseObjectKey("inbox/transfer.json")
 		}
 		transfer, insertErr := a.store.InsertTransfer(r.Context(), store.TransferInput{ID: transferID, ExecutionID: execution.ID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, DestinationCanonicalID: destination.CanonicalID, StoragePath: storagePath, SuggestedObjectKey: suggestedKey, SuggestedFilename: output.SuggestedFilename, MediaType: output.MediaType, ByteSize: int64(len(output.Bytes)), SHA256: checksumBytes(output.Bytes), ExpiresAt: completed.Add(a.transferTTL)})
 		if insertErr != nil {
 			_ = a.objects.Delete(r.Context(), []string{storagePath})
 			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeInvalidRequest, "The transfer could not be created.")
 		}
-		_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateDelivered, ResultMetadata: metadataBytes, StartedAt: &now, CompletedAt: &completed})
+		_, _ = a.store.TransitionExecution(r.Context(), execution.ID, domain.DeliverExecution(metadataBytes, now, completed))
 		a.audit(r, "transfer.created", "transfer", transfer.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, map[string]any{"destination": destination.CanonicalID, "byte_size": len(output.Bytes)}, viewers)
 		a.audit(r, "route.execution_completed", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusSucceeded, metadata, viewers)
 		return map[string]any{"execution_id": execution.ID, "route_id": config.Route.ID, "source": source.CanonicalID, "source_path": config.QueryPath.Path, "destination": destination.CanonicalID, "outcome": "delivered", "transfer": transfer}, nil
 	}
-	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateDelivered, ResultMetadata: metadataBytes, StartedAt: &now, CompletedAt: &completed})
+	_, _ = a.store.TransitionExecution(r.Context(), execution.ID, domain.DeliverExecution(metadataBytes, now, completed))
 	a.audit(r, "route.execution_completed", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusSucceeded, metadata, viewers)
 	result := map[string]any{"execution_id": execution.ID, "route_id": config.Route.ID, "source": source.CanonicalID, "source_path": config.QueryPath.Path, "destination": destination.CanonicalID, "outcome": "delivered", "result": metadata}
 	if utf8.Valid(output.Bytes) && (strings.HasPrefix(output.MediaType, "text/") || output.MediaType == "application/json") {
@@ -269,7 +274,7 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 func assetSnapshot(values []domain.Asset) []map[string]string {
 	result := make([]map[string]string, 0, len(values))
 	for _, value := range values {
-		result = append(result, map[string]string{"asset_id": value.ID, "sha256": value.SHA256})
+		result = append(result, map[string]string{"asset_id": string(value.ID), "sha256": value.SHA256})
 	}
 	return result
 }
@@ -292,19 +297,19 @@ func safeErrorMessage(err error) string {
 	return "Route execution failed."
 }
 
-func (a *API) failExecution(r *http.Request, executionID, sourceBrainID string, viewers []string, code domain.Code, message string) error {
+func (a *API) failExecution(r *http.Request, executionID, sourceBrainID domain.RecordID, viewers []domain.RecordID, code domain.Code, message string) error {
 	completed := a.now().UTC()
-	_, _ = a.store.UpdateExecutionState(r.Context(), executionID, store.ExecutionUpdate{State: domain.ExecutionStateFailed, ErrorCode: &code, ErrorMessage: &message, CompletedAt: &completed})
+	_, _ = a.store.TransitionExecution(r.Context(), executionID, domain.FailExecution(code, message, completed))
 	a.audit(r, "route.execution_failed", "execution", executionID, &sourceBrainID, nil, &executionID, domain.AuditStatusFailed, map[string]any{"error_code": code}, viewers)
 	return domain.NewError(code, message)
 }
 
-func executionViewers(source, destination domain.Brain, services []domain.Service, actor string) []string {
-	values := []string{actor, source.OwnerUserID, destination.OwnerUserID}
+func executionViewers(source, destination domain.Brain, services []domain.Service, actor domain.RecordID) []domain.RecordID {
+	values := []domain.RecordID{actor, source.OwnerUserID, destination.OwnerUserID}
 	for _, service := range services {
 		values = append(values, service.OwnerUserID)
 	}
-	return uniqueStrings(values)
+	return uniqueRecordIDs(values)
 }
 func uniqueStrings(values []string) []string {
 	seen := map[string]bool{}
@@ -317,13 +322,26 @@ func uniqueStrings(values []string) []string {
 	}
 	return result
 }
-func (a *API) audit(r *http.Request, eventType, resourceType, resourceID string, brainID, serviceID, executionID *string, status domain.AuditStatus, metadata map[string]any, viewers []string) {
+func (a *API) audit(r *http.Request, eventType, resourceType string, resourceID domain.RecordID, brainID, serviceID, executionID *domain.RecordID, status domain.AuditStatus, metadata map[string]any, viewers []domain.RecordID) {
 	actor := activeUser(r.Context()).ID
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
 	bytes, _ := json.Marshal(metadata)
-	_, _ = a.store.InsertAuditEvent(r.Context(), store.AuditEventInput{ID: newUUID(), EventType: eventType, ActorUserID: &actor, ResourceType: resourceType, ResourceID: &resourceID, BrainID: brainID, ServiceID: serviceID, ExecutionID: executionID, Status: status, Metadata: bytes, ViewerUserIDs: uniqueStrings(viewers)})
+	_, _ = a.store.InsertAuditEvent(r.Context(), store.AuditEventInput{ID: newUUID(), EventType: eventType, ActorUserID: &actor, ResourceType: resourceType, ResourceID: &resourceID, BrainID: brainID, ServiceID: serviceID, ExecutionID: executionID, Status: status, Metadata: bytes, ViewerUserIDs: uniqueRecordIDs(viewers)})
+}
+
+func uniqueRecordIDs(values []domain.RecordID) []domain.RecordID {
+	seen := make(map[domain.RecordID]struct{}, len(values))
+	result := make([]domain.RecordID, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (a *API) getExecution(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +366,7 @@ func (a *API) getExecutionTrace(w http.ResponseWriter, r *http.Request) {
 	writeData(w, r, http.StatusOK, map[string]any{"execution": execution, "hops": hops})
 }
 func (a *API) visibleExecution(r *http.Request) (domain.RouteExecution, error) {
-	execution, err := a.store.GetExecution(r.Context(), r.PathValue("executionId"))
+	execution, err := a.store.GetExecution(r.Context(), recordIDAtBoundary(r.PathValue("executionId")))
 	if err != nil {
 		return domain.RouteExecution{}, domain.NewError(domain.CodeNodeNotFound, "The execution does not exist.")
 	}
@@ -362,7 +380,7 @@ func (a *API) visibleExecution(r *http.Request) (domain.RouteExecution, error) {
 		return domain.RouteExecution{}, domain.NewError(domain.CodeNotAuthorized, "The execution is not visible to this user.")
 	}
 	visible := execution.ActorUserID != nil && *execution.ActorUserID == userID
-	for _, id := range []*string{execution.SourceBrainID, execution.DestinationBrainID, execution.InitiatingBrainID} {
+	for _, id := range []*domain.RecordID{execution.SourceBrainID, execution.DestinationBrainID, execution.InitiatingBrainID} {
 		if id != nil {
 			if brain, getErr := a.store.GetBrain(r.Context(), *id); getErr == nil && brain.OwnerUserID == userID {
 				visible = true
@@ -375,14 +393,14 @@ func (a *API) visibleExecution(r *http.Request) (domain.RouteExecution, error) {
 	return execution, nil
 }
 
-func requireIdempotencyKey(r *http.Request) (string, error) {
-	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if len(key) < 8 || len(key) > 200 {
+func requireIdempotencyKey(r *http.Request) (domain.IdempotencyKey, error) {
+	key, err := domain.ParseIdempotencyKey(r.Header.Get("Idempotency-Key"))
+	if err != nil {
 		return "", domain.NewError(domain.CodeIdempotencyKeyRequired, "An Idempotency-Key of 8 to 200 characters is required.")
 	}
 	return key, nil
 }
-func (a *API) startIdempotency(r *http.Request, scope, key string, body []byte) (store.IdempotencyRecord, any, error) {
+func (a *API) startIdempotency(r *http.Request, scope string, key domain.IdempotencyKey, body []byte) (store.IdempotencyRecord, any, error) {
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
 	userID := activeUser(r.Context()).ID

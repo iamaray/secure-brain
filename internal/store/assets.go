@@ -66,7 +66,7 @@ func (s *Store) UpdateAsset(ctx context.Context, input AssetInput) (domain.Asset
 	return asset, nil
 }
 
-func (s *Store) GetAsset(ctx context.Context, id string) (domain.Asset, error) {
+func (s *Store) GetAsset(ctx context.Context, id domain.RecordID) (domain.Asset, error) {
 	asset, err := scanAsset(s.db.QueryRow(ctx, `
 		select id, brain_id, object_key, storage_path, original_filename, media_type,
 		       byte_size, sha256, format, processing_state, parse_error, created_at, updated_at
@@ -78,7 +78,7 @@ func (s *Store) GetAsset(ctx context.Context, id string) (domain.Asset, error) {
 	return asset, nil
 }
 
-func (s *Store) GetAssetInBrain(ctx context.Context, brainID, assetID string) (domain.Asset, error) {
+func (s *Store) GetAssetInBrain(ctx context.Context, brainID, assetID domain.RecordID) (domain.Asset, error) {
 	asset, err := scanAsset(s.db.QueryRow(ctx, `
 		select id, brain_id, object_key, storage_path, original_filename, media_type,
 		       byte_size, sha256, format, processing_state, parse_error, created_at, updated_at
@@ -90,7 +90,7 @@ func (s *Store) GetAssetInBrain(ctx context.Context, brainID, assetID string) (d
 	return asset, nil
 }
 
-func (s *Store) GetAssetByObjectKey(ctx context.Context, brainID, objectKey string) (domain.Asset, error) {
+func (s *Store) GetAssetByObjectKey(ctx context.Context, brainID domain.RecordID, objectKey domain.ObjectKey) (domain.Asset, error) {
 	asset, err := scanAsset(s.db.QueryRow(ctx, `
 		select id, brain_id, object_key, storage_path, original_filename, media_type,
 		       byte_size, sha256, format, processing_state, parse_error, created_at, updated_at
@@ -102,7 +102,7 @@ func (s *Store) GetAssetByObjectKey(ctx context.Context, brainID, objectKey stri
 	return asset, nil
 }
 
-func (s *Store) ListAssets(ctx context.Context, brainID string, limit int) ([]domain.Asset, error) {
+func (s *Store) ListAssets(ctx context.Context, brainID domain.RecordID, limit int) ([]domain.Asset, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -132,7 +132,7 @@ func (s *Store) ListAssets(ctx context.Context, brainID string, limit int) ([]do
 	return assets, nil
 }
 
-func (s *Store) DeleteAsset(ctx context.Context, brainID, assetID string) (bool, error) {
+func (s *Store) DeleteAsset(ctx context.Context, brainID, assetID domain.RecordID) (bool, error) {
 	tag, err := s.db.Exec(ctx, `delete from public.assets where id = $2 and brain_id = $1`, brainID, assetID)
 	if err != nil {
 		return false, fmt.Errorf("delete asset: %w", err)
@@ -140,7 +140,7 @@ func (s *Store) DeleteAsset(ctx context.Context, brainID, assetID string) (bool,
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s *Store) AssetReferencedByEnabledPath(ctx context.Context, assetID string) (bool, error) {
+func (s *Store) AssetReferencedByEnabledPath(ctx context.Context, assetID domain.RecordID) (bool, error) {
 	var inUse bool
 	err := s.db.QueryRow(ctx, `
 		select exists (
@@ -156,7 +156,7 @@ func (s *Store) AssetReferencedByEnabledPath(ctx context.Context, assetID string
 	return inUse, nil
 }
 
-func nilIfEmpty(value string) any {
+func nilIfEmpty(value domain.RecordID) any {
 	if value == "" {
 		return nil
 	}

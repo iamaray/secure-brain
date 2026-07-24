@@ -21,11 +21,15 @@ import (
 
 var decimalFloatPattern = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
+// Compatibility aliases keep callers source-compatible while domain remains the
+// sole owner of operation values.
 const (
-	OperationRawRead    = "raw_read"
-	OperationTextSearch = "text_search"
-	OperationCSVQuery   = "csv_query"
+	OperationRawRead    = domain.OperationRawRead
+	OperationTextSearch = domain.OperationTextSearch
+	OperationCSVQuery   = domain.OperationCSVQuery
+)
 
+const (
 	defaultMaxPayloadBytes = 25 * 1024 * 1024
 	defaultMaxCSVRows      = 500
 	defaultMaxTextMatches  = 200
@@ -47,12 +51,12 @@ type Filter struct {
 }
 
 type Request struct {
-	Operation string   `json:"operation"`
-	Query     string   `json:"query,omitempty"`
-	Select    []string `json:"select,omitempty"`
-	Filters   []Filter `json:"filters,omitempty"`
-	Limit     int      `json:"limit,omitempty"`
-	Offset    int      `json:"offset,omitempty"`
+	Operation domain.Operation `json:"operation"`
+	Query     string           `json:"query,omitempty"`
+	Select    []string         `json:"select,omitempty"`
+	Filters   []Filter         `json:"filters,omitempty"`
+	Limit     int              `json:"limit,omitempty"`
+	Offset    int              `json:"offset,omitempty"`
 }
 
 // Limits are configurable application bounds. Non-positive values select the
@@ -112,17 +116,17 @@ func Execute(assets []Asset, req Request, limits Limits) (domain.Payload, error)
 }
 
 type rawManifest struct {
-	Operation string             `json:"operation"`
+	Operation domain.Operation   `json:"operation"`
 	Assets    []rawManifestAsset `json:"assets"`
 }
 
 type rawManifestAsset struct {
-	AssetID    string `json:"asset_id"`
-	Filename   string `json:"filename"`
-	MediaType  string `json:"media_type"`
-	ByteSize   int    `json:"byte_size"`
-	SHA256     string `json:"sha256"`
-	DataBase64 string `json:"data_base64"`
+	AssetID    domain.RecordID `json:"asset_id"`
+	Filename   string          `json:"filename"`
+	MediaType  string          `json:"media_type"`
+	ByteSize   int             `json:"byte_size"`
+	SHA256     string          `json:"sha256"`
+	DataBase64 string          `json:"data_base64"`
 }
 
 func rawRead(assets []Asset) (domain.Payload, error) {
@@ -135,13 +139,13 @@ func rawRead(assets []Asset) (domain.Payload, error) {
 			Metadata: map[string]any{
 				"operation":   OperationRawRead,
 				"asset_count": 1,
-				"asset_ids":   []string{a.Asset.ID},
+				"asset_ids":   []domain.RecordID{a.Asset.ID},
 			},
 		}, nil
 	}
 
 	manifest := rawManifest{Operation: OperationRawRead, Assets: make([]rawManifestAsset, 0, len(assets))}
-	ids := make([]string, 0, len(assets))
+	ids := make([]domain.RecordID, 0, len(assets))
 	for _, a := range assets {
 		sum := sha256.Sum256(a.Bytes)
 		checksum := a.Asset.SHA256
@@ -166,24 +170,24 @@ func rawRead(assets []Asset) (domain.Payload, error) {
 }
 
 type skippedAsset struct {
-	AssetID string `json:"asset_id"`
-	Reason  string `json:"reason"`
+	AssetID domain.RecordID `json:"asset_id"`
+	Reason  string          `json:"reason"`
 }
 
 type textSearchResult struct {
-	Operation  string         `json:"operation"`
-	Query      string         `json:"query"`
-	Matches    []textMatch    `json:"matches"`
-	MatchCount int            `json:"match_count"`
-	Truncated  bool           `json:"truncated"`
-	Skipped    []skippedAsset `json:"skipped"`
+	Operation  domain.Operation `json:"operation"`
+	Query      string           `json:"query"`
+	Matches    []textMatch      `json:"matches"`
+	MatchCount int              `json:"match_count"`
+	Truncated  bool             `json:"truncated"`
+	Skipped    []skippedAsset   `json:"skipped"`
 }
 
 type textMatch struct {
-	AssetID    string `json:"asset_id"`
-	Filename   string `json:"filename"`
-	LineNumber int    `json:"line_number"`
-	Context    string `json:"context"`
+	AssetID    domain.RecordID `json:"asset_id"`
+	Filename   string          `json:"filename"`
+	LineNumber int             `json:"line_number"`
+	Context    string          `json:"context"`
 }
 
 func textSearch(assets []Asset, needle string, limits Limits) (domain.Payload, error) {
@@ -194,7 +198,7 @@ func textSearch(assets []Asset, needle string, limits Limits) (domain.Payload, e
 	compatible := 0
 	stop := false
 	for _, a := range assets {
-		if a.Asset.ProcessingState != "ready" || (a.Asset.Format != "text" && a.Asset.Format != "markdown") || !utf8.Valid(a.Bytes) {
+		if a.Asset.ProcessingState != domain.AssetStateReady || (a.Asset.Format != domain.AssetFormatText && a.Asset.Format != domain.AssetFormatMarkdown) || !utf8.Valid(a.Bytes) {
 			result.Skipped = append(result.Skipped, skippedAsset{AssetID: a.Asset.ID, Reason: "incompatible_format_or_state"})
 			continue
 		}
@@ -265,19 +269,19 @@ func findFoldRunes(haystack, needle []rune) (int, int, bool) {
 }
 
 type csvQueryResult struct {
-	Operation string          `json:"operation"`
-	Files     []csvFileResult `json:"files"`
-	Skipped   []skippedAsset  `json:"skipped"`
+	Operation domain.Operation `json:"operation"`
+	Files     []csvFileResult  `json:"files"`
+	Skipped   []skippedAsset   `json:"skipped"`
 }
 
 type csvFileResult struct {
-	AssetID          string     `json:"asset_id"`
-	Filename         string     `json:"filename"`
-	Columns          []string   `json:"columns"`
-	Rows             [][]string `json:"rows"`
-	ReturnedRowCount int        `json:"returned_row_count"`
-	MatchedRowCount  int        `json:"matched_row_count"`
-	HasMore          bool       `json:"has_more"`
+	AssetID          domain.RecordID `json:"asset_id"`
+	Filename         string          `json:"filename"`
+	Columns          []string        `json:"columns"`
+	Rows             [][]string      `json:"rows"`
+	ReturnedRowCount int             `json:"returned_row_count"`
+	MatchedRowCount  int             `json:"matched_row_count"`
+	HasMore          bool            `json:"has_more"`
 }
 
 func csvQuery(assets []Asset, req Request, limits Limits) (domain.Payload, error) {
@@ -299,7 +303,7 @@ func csvQuery(assets []Asset, req Request, limits Limits) (domain.Payload, error
 	compatible := 0
 	remaining := limit
 	for _, a := range assets {
-		if a.Asset.Format != "csv" || a.Asset.ProcessingState != "ready" {
+		if a.Asset.Format != domain.AssetFormatCSV || a.Asset.ProcessingState != domain.AssetStateReady {
 			result.Skipped = append(result.Skipped, skippedAsset{AssetID: a.Asset.ID, Reason: "incompatible_format_or_state"})
 			continue
 		}

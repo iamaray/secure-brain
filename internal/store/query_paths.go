@@ -17,7 +17,11 @@ func scanQueryPath(row interface{ Scan(...any) error }) (domain.QueryPath, error
 		&operations, &path.ConfigVersion, &path.CreatedAt, &path.UpdatedAt)
 	path.Operations = make([]domain.Operation, len(operations))
 	for i := range operations {
-		path.Operations[i] = domain.Operation(operations[i])
+		operation, parseErr := domain.ParseOperation(operations[i])
+		if parseErr != nil {
+			return domain.QueryPath{}, fmt.Errorf("scan query path operation: %w", parseErr)
+		}
+		path.Operations[i] = operation
 	}
 	return path, err
 }
@@ -62,7 +66,7 @@ func (s *Store) CreateQueryPath(ctx context.Context, input QueryPathConfigInput)
 
 // ReplaceQueryPath replaces the complete persisted configuration and increments
 // config_version only if expectedVersion matches.
-func (s *Store) ReplaceQueryPath(ctx context.Context, id string, expectedVersion int64, input QueryPathConfigInput) (QueryPathConfig, error) {
+func (s *Store) ReplaceQueryPath(ctx context.Context, id domain.RecordID, expectedVersion int64, input QueryPathConfigInput) (QueryPathConfig, error) {
 	var result QueryPathConfig
 	err := s.withinTx(ctx, func(tx *Store) error {
 		_, err := scanQueryPath(tx.db.QueryRow(ctx, `
@@ -101,7 +105,7 @@ func (s *Store) ReplaceQueryPath(ctx context.Context, id string, expectedVersion
 	return result, err
 }
 
-func (s *Store) insertQueryPathRelations(ctx context.Context, queryPathID string, input QueryPathConfigInput) error {
+func (s *Store) insertQueryPathRelations(ctx context.Context, queryPathID domain.RecordID, input QueryPathConfigInput) error {
 	for position, assetID := range input.AssetIDs {
 		if _, err := s.db.Exec(ctx, `
 			insert into public.query_path_assets (query_path_id, asset_id, position)
@@ -148,7 +152,7 @@ func (s *Store) insertQueryPathRelations(ctx context.Context, queryPathID string
 	return nil
 }
 
-func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (QueryPathConfig, error) {
+func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID domain.RecordID) (QueryPathConfig, error) {
 	path, err := scanQueryPath(s.db.QueryRow(ctx, `
 		select id, brain_id, path, visibility, state, operations,
 		       config_version, created_at, updated_at
@@ -266,8 +270,8 @@ func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (Qu
 	return config, nil
 }
 
-func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID, path string) (QueryPathConfig, error) {
-	var id string
+func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID domain.BrainID, path domain.QueryPathValue) (QueryPathConfig, error) {
+	var id domain.RecordID
 	err := s.db.QueryRow(ctx, `
 		select qp.id
 		from public.query_paths qp
@@ -280,7 +284,7 @@ func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID, 
 	return s.LoadQueryPathConfig(ctx, id)
 }
 
-func (s *Store) ListQueryPaths(ctx context.Context, brainID string, limit int) ([]domain.QueryPath, error) {
+func (s *Store) ListQueryPaths(ctx context.Context, brainID domain.RecordID, limit int) ([]domain.QueryPath, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -310,7 +314,7 @@ func (s *Store) ListQueryPaths(ctx context.Context, brainID string, limit int) (
 	return paths, nil
 }
 
-func (s *Store) DeleteQueryPath(ctx context.Context, brainID, queryPathID string, expectedVersion int64) error {
+func (s *Store) DeleteQueryPath(ctx context.Context, brainID, queryPathID domain.RecordID, expectedVersion int64) error {
 	tag, err := s.db.Exec(ctx, `
 		delete from public.query_paths
 		where id = $1 and brain_id = $2 and config_version = $3

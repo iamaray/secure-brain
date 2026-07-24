@@ -2,15 +2,12 @@ package routes
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"secure-brain/internal/domain"
 )
 
 const DefaultMaxRouteHops = 20
-
-var queryPathPattern = regexp.MustCompile(`^/[a-z0-9][a-z0-9/_-]*$`)
 
 type FieldError struct {
 	Field   string `json:"field"`
@@ -40,7 +37,7 @@ type Configuration struct {
 // ValidationContext contains resolved current state and makes validation pure.
 // ExistingPaths maps a normalized path to its query-path ID.
 type ValidationContext struct {
-	ActorUserID   string
+	ActorUserID   domain.RecordID
 	SourceBrain   domain.Brain
 	Assets        map[string]domain.Asset
 	Brains        map[string]domain.Brain
@@ -51,18 +48,9 @@ type ValidationContext struct {
 
 // ValidatePath applies all normalized, reserved-prefix, and traversal rules.
 func ValidatePath(path string) error {
-	if !queryPathPattern.MatchString(path) || strings.Contains(path, "//") || strings.HasSuffix(path, "/") {
-		return domain.NewError(domain.CodeRouteInvalid, "The query path is not normalized.")
-	}
-	for _, segment := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
-		if segment == "." || segment == ".." {
-			return domain.NewError(domain.CodeRouteInvalid, "The query path cannot contain traversal segments.")
-		}
-	}
-	for _, reserved := range []string{"/api", "/q", "/healthz", "/readyz"} {
-		if path == reserved || strings.HasPrefix(path, reserved+"/") {
-			return domain.NewError(domain.CodeRouteInvalid, "The query path uses a reserved application prefix.")
-		}
+	if _, err := domain.ParseQueryPath(path); err != nil {
+		message := err.Error()
+		return domain.NewError(domain.CodeRouteInvalid, strings.ToUpper(message[:1])+message[1:]+".")
 	}
 	return nil
 }
@@ -118,7 +106,7 @@ func ValidateConfiguration(cfg Configuration, ctx ValidationContext) []FieldErro
 			continue
 		}
 		seenOperations[operation] = struct{}{}
-		if !knownOperation(operation) {
+		if !operation.Valid() {
 			add(field, "unknown", "Unknown query operation.")
 			continue
 		}
@@ -134,13 +122,13 @@ func ValidateConfiguration(cfg Configuration, ctx ValidationContext) []FieldErro
 		}
 	}
 
-	if cfg.Visibility != domain.VisibilityPublic && cfg.Visibility != domain.VisibilityPrivate {
+	if !cfg.Visibility.Valid() {
 		add("visibility", "invalid", "Visibility must be public or private.")
 	}
 	brainGrants := validateBrainGrants(cfg.AllowedBrainIDs, ctx.Brains, add)
 	serviceGrants := validateServiceGrants(cfg.AllowedServiceIDs, ctx.Services, add)
 
-	if cfg.State != domain.QueryPathStateDraft && cfg.State != domain.QueryPathStateEnabled && cfg.State != domain.QueryPathStateDisabled {
+	if !cfg.State.Valid() {
 		add("state", "invalid", "State must be draft, enabled, or disabled.")
 	}
 	if cfg.State == domain.QueryPathStateEnabled && cfg.Route == nil {
@@ -163,7 +151,7 @@ func ValidateConfiguration(cfg Configuration, ctx ValidationContext) []FieldErro
 			distinctHops[id] = struct{}{}
 		}
 		terminalValid := false
-		if cfg.Route.Terminal == "caller" {
+		if cfg.Route.Terminal == string(domain.TerminalModeCaller) {
 			terminalValid = true
 		} else if _, exists := ctx.Brains[cfg.Route.Terminal]; exists && strings.HasPrefix(cfg.Route.Terminal, "brain.") {
 			terminalValid = true
@@ -177,7 +165,7 @@ func ValidateConfiguration(cfg Configuration, ctx ValidationContext) []FieldErro
 					add("allowed_service_ids", "missing_route_service", "Every distinct route Service must be granted on a private path: "+serviceID)
 				}
 			}
-			if terminalValid && cfg.Route.Terminal != "caller" && cfg.Route.Terminal != ctx.SourceBrain.CanonicalID {
+			if terminalValid && cfg.Route.Terminal != string(domain.TerminalModeCaller) && cfg.Route.Terminal != string(ctx.SourceBrain.CanonicalID) {
 				if _, granted := brainGrants[cfg.Route.Terminal]; !granted {
 					add("allowed_brain_ids", "missing_destination", "The fixed destination must be granted on a private path.")
 				}
@@ -237,10 +225,6 @@ func validateServiceGrants(ids []string, services map[string]domain.Service, add
 	return grants
 }
 
-func knownOperation(operation domain.Operation) bool {
-	return operation == domain.OperationRawRead || operation == domain.OperationTextSearch || operation == domain.OperationCSVQuery
-}
-
 func operationCompatible(operation domain.Operation, asset domain.Asset) bool {
 	if operation == domain.OperationRawRead {
 		// Raw compatibility is a format property; availability is a separate
@@ -260,24 +244,24 @@ func operationCompatible(operation domain.Operation, asset domain.Asset) bool {
 type AuthorizationInput struct {
 	Mode                domain.ExecutionMode
 	Visibility          domain.Visibility
-	SourceBrainID       string
-	InitiatingBrainID   string
+	SourceBrainID       domain.BrainID
+	InitiatingBrainID   domain.BrainID
 	InitiatorOwned      bool
 	InitiatorRegistered bool
 	Terminal            string
-	BrainGrants         []string
-	ServiceGrants       []string
-	ServiceHops         []string
+	BrainGrants         []domain.BrainID
+	ServiceGrants       []domain.ServiceID
+	ServiceHops         []domain.ServiceID
 	MaxHops             int
 }
 
 // ResolveTerminal binds caller at execution time and enforces fixed-terminal
 // pull and push rules without accepting a caller-supplied destination.
-func ResolveTerminal(mode domain.ExecutionMode, terminal, sourceBrainID, initiatingBrainID string) (string, error) {
+func ResolveTerminal(mode domain.ExecutionMode, terminal string, sourceBrainID, initiatingBrainID domain.BrainID) (domain.BrainID, error) {
 	if mode != domain.ExecutionModePull && mode != domain.ExecutionModePush {
 		return "", domain.NewError(domain.CodeRouteInvalid, "Unknown route execution mode.")
 	}
-	if terminal == "caller" {
+	if terminal == string(domain.TerminalModeCaller) {
 		if mode == domain.ExecutionModePush {
 			return "", domain.NewError(domain.CodeRouteInvalid, "Push requires a fixed Brain terminal.")
 		}
@@ -286,21 +270,22 @@ func ResolveTerminal(mode domain.ExecutionMode, terminal, sourceBrainID, initiat
 		}
 		return initiatingBrainID, nil
 	}
-	if !strings.HasPrefix(terminal, "brain.") {
+	fixedID, parseErr := domain.ParseBrainID(terminal)
+	if parseErr != nil {
 		return "", domain.NewError(domain.CodeRouteInvalid, "Route terminal is invalid.")
 	}
-	if mode == domain.ExecutionModePull && initiatingBrainID != terminal {
+	if mode == domain.ExecutionModePull && initiatingBrainID != fixedID {
 		return "", domain.NewError(domain.CodeDestinationMismatch, "The initiating Brain does not match the fixed route destination.")
 	}
 	if mode == domain.ExecutionModePush && initiatingBrainID != sourceBrainID {
 		return "", domain.NewError(domain.CodeNotAuthorized, "Only the source Brain may initiate a push.")
 	}
-	return terminal, nil
+	return fixedID, nil
 }
 
 // Authorize is the single reusable public/private policy function for pull and
 // push. Callers should validate current node existence separately.
-func Authorize(in AuthorizationInput) (string, error) {
+func Authorize(in AuthorizationInput) (domain.BrainID, error) {
 	if !in.InitiatorOwned {
 		return "", domain.NewError(domain.CodeInitiatorNotOwned, "The active user does not own the initiating Brain.")
 	}
@@ -324,7 +309,7 @@ func Authorize(in AuthorizationInput) (string, error) {
 	if in.Visibility != domain.VisibilityPrivate {
 		return "", domain.NewError(domain.CodeRouteInvalid, "Query path visibility is invalid.")
 	}
-	brainGrants := stringSet(in.BrainGrants)
+	brainGrants := valueSet(in.BrainGrants)
 	if in.InitiatingBrainID != in.SourceBrainID {
 		if _, allowed := brainGrants[in.InitiatingBrainID]; !allowed {
 			return "", domain.NewError(domain.CodePrincipalNotAuthorized, "The initiating Brain is not authorized for this path.")
@@ -335,8 +320,8 @@ func Authorize(in AuthorizationInput) (string, error) {
 			return "", domain.NewError(domain.CodePrincipalNotAuthorized, "The destination Brain is not authorized for this path.")
 		}
 	}
-	serviceGrants := stringSet(in.ServiceGrants)
-	checked := make(map[string]struct{}, len(in.ServiceHops))
+	serviceGrants := valueSet(in.ServiceGrants)
+	checked := make(map[domain.ServiceID]struct{}, len(in.ServiceHops))
 	for _, serviceID := range in.ServiceHops {
 		if _, seen := checked[serviceID]; seen {
 			continue
@@ -349,8 +334,8 @@ func Authorize(in AuthorizationInput) (string, error) {
 	return destination, nil
 }
 
-func stringSet(values []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
+func valueSet[T comparable](values []T) map[T]struct{} {
+	set := make(map[T]struct{}, len(values))
 	for _, value := range values {
 		set[value] = struct{}{}
 	}

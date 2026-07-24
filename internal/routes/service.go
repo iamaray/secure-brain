@@ -29,8 +29,8 @@ func (IdentityServiceExecutor) Execute(ctx context.Context, _ domain.Service, in
 
 type HopResult struct {
 	HopIndex           int
-	ServiceID          string
-	ServiceCanonicalID string
+	ServiceID          domain.RecordID
+	ServiceCanonicalID domain.ServiceID
 	Status             domain.HopStatus
 	InputSHA256        string
 	OutputSHA256       string

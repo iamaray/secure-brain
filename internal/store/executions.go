@@ -67,8 +67,8 @@ func (s *Store) InsertExecution(ctx context.Context, input ExecutionInput) (doma
 	return execution, nil
 }
 
-func (s *Store) UpdateExecutionState(ctx context.Context, executionID string, update ExecutionUpdate) (domain.RouteExecution, error) {
-	result := update.ResultMetadata
+func (s *Store) TransitionExecution(ctx context.Context, executionID domain.RecordID, transition domain.ExecutionTransition) (domain.RouteExecution, error) {
+	result := transition.ResultMetadata()
 	if len(result) == 0 {
 		result = json.RawMessage(`{}`)
 	}
@@ -85,15 +85,15 @@ func (s *Store) UpdateExecutionState(ctx context.Context, executionID string, up
 		          source_brain_id, destination_brain_id, source_canonical_id, source_path,
 		          destination_canonical_id, operation, state, route_snapshot, result_metadata,
 		          error_code, error_message, created_at, started_at, completed_at
-	`, executionID, update.State, result, codeValue(update.ErrorCode), update.ErrorMessage,
-		update.StartedAt, update.CompletedAt))
+	`, executionID, transition.State(), result, codeValue(transition.ErrorCode()), transition.ErrorMessage(),
+		transition.StartedAt(), transition.CompletedAt()))
 	if err != nil {
 		return domain.RouteExecution{}, fmt.Errorf("update execution state: %w", err)
 	}
 	return execution, nil
 }
 
-func (s *Store) GetExecution(ctx context.Context, executionID string) (domain.RouteExecution, error) {
+func (s *Store) GetExecution(ctx context.Context, executionID domain.RecordID) (domain.RouteExecution, error) {
 	execution, err := scanExecution(s.db.QueryRow(ctx, `
 		select id, mode, query_path_id, actor_user_id, initiating_brain_id,
 		       source_brain_id, destination_brain_id, source_canonical_id, source_path,
@@ -144,7 +144,7 @@ func codeValue(code *domain.Code) any {
 	return string(*code)
 }
 
-func (s *Store) ListExecutionHops(ctx context.Context, executionID string) ([]domain.ExecutionHop, error) {
+func (s *Store) ListExecutionHops(ctx context.Context, executionID domain.RecordID) ([]domain.ExecutionHop, error) {
 	rows, err := s.db.Query(ctx, `
 		select id, execution_id, hop_index, service_id, service_canonical_id,
 		       status, input_sha256, output_sha256, duration_ms, error_code, created_at

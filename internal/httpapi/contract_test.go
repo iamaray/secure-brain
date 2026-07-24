@@ -618,7 +618,7 @@ func TestSessionAndStableUsersHTTPContractIntegration(t *testing.T) {
 	}
 	if !slices.IsSortedFunc(users, func(a, b domain.User) int {
 		if a.Handle == b.Handle {
-			return strings.Compare(a.ID, b.ID)
+			return strings.Compare(string(a.ID), string(b.ID))
 		}
 		return strings.Compare(a.Handle, b.Handle)
 	}) {
@@ -632,7 +632,7 @@ func TestSessionAndStableUsersHTTPContractIntegration(t *testing.T) {
 	}
 	assertMarshaledEnvelope(t, listed, users)
 
-	sessionBody, err := json.Marshal(map[string]string{"user_id": users[0].ID})
+	sessionBody, err := json.Marshal(map[string]string{"user_id": string(users[0].ID)})
 	if err != nil {
 		t.Fatal(err)
 	}

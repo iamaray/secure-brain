@@ -88,12 +88,12 @@ func TestAppConnectionHTTPIntegration(t *testing.T) {
 	}
 
 	handler := newContractRouter(db)
-	sessionCookie := signInContractUser(t, handler, user.ID)
+	sessionCookie := signInContractUser(t, handler, string(user.ID))
 	request := func(method, path string, body []byte) *httptest.ResponseRecorder {
 		return contractRequest(handler, method, path, body, http.Header{"Content-Type": {"application/json"}}, sessionCookie)
 	}
 
-	listed := request(http.MethodGet, "/api/brains/"+brain.CanonicalID+"/app-connections", nil)
+	listed := request(http.MethodGet, "/api/brains/"+string(brain.CanonicalID)+"/app-connections", nil)
 	if listed.Code != http.StatusOK {
 		t.Fatalf("GET status = %d body=%s", listed.Code, listed.Body.String())
 	}
@@ -115,16 +115,16 @@ func TestAppConnectionHTTPIntegration(t *testing.T) {
 	}
 
 	payload, _ := json.Marshal(appConnectionRequest{ServiceID: app.CanonicalID})
-	connected := request(http.MethodPost, "/api/brains/"+brain.CanonicalID+"/app-connections", payload)
+	connected := request(http.MethodPost, "/api/brains/"+string(brain.CanonicalID)+"/app-connections", payload)
 	if connected.Code != http.StatusCreated {
 		t.Fatalf("POST status = %d body=%s", connected.Code, connected.Body.String())
 	}
 
-	deleted := request(http.MethodDelete, "/api/brains/"+brain.CanonicalID+"/app-connections/"+app.CanonicalID, nil)
+	deleted := request(http.MethodDelete, "/api/brains/"+string(brain.CanonicalID)+"/app-connections/"+app.CanonicalID, nil)
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d body=%s", deleted.Code, deleted.Body.String())
 	}
-	relisted := request(http.MethodGet, "/api/brains/"+brain.CanonicalID+"/app-connections", nil)
+	relisted := request(http.MethodGet, "/api/brains/"+string(brain.CanonicalID)+"/app-connections", nil)
 	if relisted.Code != http.StatusOK {
 		t.Fatalf("second GET status = %d body=%s", relisted.Code, relisted.Body.String())
 	}

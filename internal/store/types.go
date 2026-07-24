@@ -8,9 +8,9 @@ import (
 )
 
 type Session struct {
-	ID         string
+	ID         domain.RecordID
 	TokenHash  []byte
-	UserID     string
+	UserID     domain.RecordID
 	CreatedAt  time.Time
 	LastSeenAt time.Time
 	ExpiresAt  time.Time
@@ -27,27 +27,27 @@ type QueryPathConfig struct {
 }
 
 type QueryPathConfigInput struct {
-	BrainID           string
-	Path              string
+	BrainID           domain.RecordID
+	Path              domain.QueryPathValue
 	Visibility        domain.Visibility
 	State             domain.QueryPathState
 	Operations        []domain.Operation
-	AssetIDs          []string
-	AllowedBrainIDs   []string
-	AllowedServiceIDs []string
+	AssetIDs          []domain.RecordID
+	AllowedBrainIDs   []domain.RecordID
+	AllowedServiceIDs []domain.RecordID
 	Route             *RouteInput
 }
 
 type RouteInput struct {
 	TerminalMode       domain.TerminalMode
-	DestinationBrainID *string
-	ServiceIDs         []string
+	DestinationBrainID *domain.RecordID
+	ServiceIDs         []domain.RecordID
 }
 
 type AssetInput struct {
-	ID               string
-	BrainID          string
-	ObjectKey        string
+	ID               domain.RecordID
+	BrainID          domain.RecordID
+	ObjectKey        domain.ObjectKey
 	StoragePath      string
 	OriginalFilename string
 	MediaType        string
@@ -59,37 +59,28 @@ type AssetInput struct {
 }
 
 type ExecutionInput struct {
-	ID                     string
+	ID                     domain.RecordID
 	Mode                   domain.ExecutionMode
-	QueryPathID            *string
-	ActorUserID            *string
-	InitiatingBrainID      *string
-	SourceBrainID          *string
-	DestinationBrainID     *string
-	SourceCanonicalID      string
-	SourcePath             string
-	DestinationCanonicalID *string
+	QueryPathID            *domain.RecordID
+	ActorUserID            *domain.RecordID
+	InitiatingBrainID      *domain.RecordID
+	SourceBrainID          *domain.RecordID
+	DestinationBrainID     *domain.RecordID
+	SourceCanonicalID      domain.BrainID
+	SourcePath             domain.QueryPathValue
+	DestinationCanonicalID *domain.BrainID
 	Operation              domain.Operation
 	State                  domain.ExecutionState
 	RouteSnapshot          json.RawMessage
 	ResultMetadata         json.RawMessage
 }
 
-type ExecutionUpdate struct {
-	State          domain.ExecutionState
-	ResultMetadata json.RawMessage
-	ErrorCode      *domain.Code
-	ErrorMessage   *string
-	StartedAt      *time.Time
-	CompletedAt    *time.Time
-}
-
 type ExecutionHopInput struct {
-	ID                 string
-	ExecutionID        string
+	ID                 domain.RecordID
+	ExecutionID        domain.RecordID
 	HopIndex           int
-	ServiceID          *string
-	ServiceCanonicalID string
+	ServiceID          *domain.RecordID
+	ServiceCanonicalID domain.ServiceID
 	Status             domain.HopStatus
 	InputSHA256        string
 	OutputSHA256       string
@@ -98,14 +89,14 @@ type ExecutionHopInput struct {
 }
 
 type TransferInput struct {
-	ID                     string
-	ExecutionID            string
-	SourceBrainID          *string
-	DestinationBrainID     *string
-	SourceCanonicalID      string
-	DestinationCanonicalID string
+	ID                     domain.RecordID
+	ExecutionID            domain.RecordID
+	SourceBrainID          *domain.RecordID
+	DestinationBrainID     *domain.RecordID
+	SourceCanonicalID      domain.BrainID
+	DestinationCanonicalID domain.BrainID
 	StoragePath            string
-	SuggestedObjectKey     string
+	SuggestedObjectKey     domain.ObjectKey
 	SuggestedFilename      string
 	MediaType              string
 	ByteSize               int64
@@ -114,10 +105,10 @@ type TransferInput struct {
 }
 
 type IdempotencyRecord struct {
-	ID             string
-	UserID         string
+	ID             domain.RecordID
+	UserID         domain.RecordID
 	Scope          string
-	IdempotencyKey string
+	IdempotencyKey domain.IdempotencyKey
 	RequestHash    string
 	ResponseStatus *int
 	ResponseBody   json.RawMessage
@@ -126,21 +117,21 @@ type IdempotencyRecord struct {
 }
 
 type AuditEventInput struct {
-	ID            string
+	ID            domain.RecordID
 	EventType     string
-	ActorUserID   *string
+	ActorUserID   *domain.RecordID
 	ResourceType  string
-	ResourceID    *string
-	BrainID       *string
-	ServiceID     *string
-	ExecutionID   *string
+	ResourceID    *domain.RecordID
+	BrainID       *domain.RecordID
+	ServiceID     *domain.RecordID
+	ExecutionID   *domain.RecordID
 	Status        domain.AuditStatus
 	Metadata      json.RawMessage
-	ViewerUserIDs []string
+	ViewerUserIDs []domain.RecordID
 }
 
 type AuditFilter struct {
-	NodeID    string
+	NodeID    domain.Principal
 	EventType string
 	Status    domain.AuditStatus
 	Before    *time.Time
@@ -148,7 +139,7 @@ type AuditFilter struct {
 }
 
 type TransferFilter struct {
-	BrainID   string
+	BrainID   domain.RecordID
 	Direction string
 	Status    domain.TransferStatus
 	Before    *time.Time
@@ -156,37 +147,37 @@ type TransferFilter struct {
 }
 
 type NetworkRoute struct {
-	RouteID                  string
-	QueryPathID              string
-	SourceBrainID            string
-	SourceCanonicalID        string
+	RouteID                  domain.RecordID
+	QueryPathID              domain.RecordID
+	SourceBrainID            domain.RecordID
+	SourceCanonicalID        domain.BrainID
 	SourceDisplayName        string
-	SourceOwnerUserID        string
-	Path                     string
+	SourceOwnerUserID        domain.RecordID
+	Path                     domain.QueryPathValue
 	Operations               []domain.Operation
 	Visibility               domain.Visibility
 	State                    domain.QueryPathState
 	TerminalMode             domain.TerminalMode
-	DestinationBrainID       *string
-	DestinationCanonicalID   *string
+	DestinationBrainID       *domain.RecordID
+	DestinationCanonicalID   *domain.BrainID
 	DestinationDisplayName   *string
-	DestinationOwnerUserID   *string
-	AllowedBrainOwnerUserIDs []string
+	DestinationOwnerUserID   *domain.RecordID
+	AllowedBrainOwnerUserIDs []domain.RecordID
 	Hops                     []NetworkHop
 }
 
 type NetworkHop struct {
 	HopIndex    int
-	ServiceID   string
-	CanonicalID string
+	ServiceID   domain.RecordID
+	CanonicalID domain.ServiceID
 	DisplayName string
-	OwnerUserID string
+	OwnerUserID domain.RecordID
 }
 
 type NetworkNode struct {
-	ID          string
+	ID          domain.Principal
 	Type        string
 	DisplayName string
-	OwnerUserID string
+	OwnerUserID domain.RecordID
 	Status      domain.NodeStatus
 }
