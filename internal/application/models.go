@@ -11,9 +11,9 @@ import (
 
 // SessionSnapshot is the authenticated session state loaded for a request.
 type SessionSnapshot struct {
-	ID         string
+	ID         domain.RecordID
 	TokenHash  []byte
-	UserID     string
+	UserID     domain.RecordID
 	CreatedAt  time.Time
 	LastSeenAt time.Time
 	ExpiresAt  time.Time
@@ -22,27 +22,27 @@ type SessionSnapshot struct {
 
 // QueryPathCommand is the complete replacement value for a query path.
 type QueryPathCommand struct {
-	BrainID           string
-	Path              string
+	BrainID           domain.RecordID
+	Path              domain.QueryPathValue
 	Visibility        domain.Visibility
 	State             domain.QueryPathState
 	Operations        []domain.Operation
-	AssetIDs          []string
-	AllowedBrainIDs   []string
-	AllowedServiceIDs []string
+	AssetIDs          []domain.RecordID
+	AllowedBrainIDs   []domain.RecordID
+	AllowedServiceIDs []domain.RecordID
 	Route             *RouteCommand
 }
 
 // RouteCommand is the persistence-neutral route portion of QueryPathCommand.
 type RouteCommand struct {
 	TerminalMode       domain.TerminalMode
-	DestinationBrainID *string
-	ServiceIDs         []string
+	DestinationBrainID *domain.RecordID
+	ServiceIDs         []domain.RecordID
 }
 
 // QueryCommand is the protocol-free query requested for one route execution.
 type QueryCommand struct {
-	Operation string
+	Operation domain.Operation
 	Query     string
 	Select    []string
 	Filters   []QueryFilter
@@ -81,20 +81,20 @@ type ConfiguredRouteSnapshot struct {
 
 // RouteSnapshot captures the resolved route used by one execution.
 type RouteSnapshot struct {
-	SourceCanonicalID   string
-	SourcePath          string
+	SourceCanonicalID   domain.BrainID
+	SourcePath          domain.QueryPathValue
 	ConfigVersion       int64
 	Visibility          domain.Visibility
 	Assets              []AssetIntegritySnapshot
 	Operation           domain.Operation
-	ServiceHops         []string
+	ServiceHops         []domain.ServiceID
 	Terminal            string
-	ResolvedDestination string
+	ResolvedDestination domain.BrainID
 }
 
 // AssetIntegritySnapshot binds an execution to the exact scoped asset checksum.
 type AssetIntegritySnapshot struct {
-	AssetID string
+	AssetID domain.RecordID
 	SHA256  string
 }
 
@@ -130,9 +130,9 @@ func SnapshotPayload(payload domain.Payload) PayloadSnapshot {
 
 // AssetWriteCommand contains the metadata required to insert or replace an asset.
 type AssetWriteCommand struct {
-	ID               string
-	BrainID          string
-	ObjectKey        string
+	ID               domain.RecordID
+	BrainID          domain.RecordID
+	ObjectKey        domain.ObjectKey
 	StoragePath      string
 	OriginalFilename string
 	MediaType        string
@@ -145,30 +145,78 @@ type AssetWriteCommand struct {
 
 // ExecutionStartCommand records the immutable inputs to a route attempt.
 type ExecutionStartCommand struct {
-	ID                     string
+	ID                     domain.RecordID
 	Mode                   domain.ExecutionMode
-	QueryPathID            *string
-	ActorUserID            *string
-	InitiatingBrainID      *string
-	SourceBrainID          *string
-	DestinationBrainID     *string
-	SourceCanonicalID      string
-	SourcePath             string
-	DestinationCanonicalID *string
+	QueryPathID            *domain.RecordID
+	ActorUserID            *domain.RecordID
+	InitiatingBrainID      *domain.RecordID
+	SourceBrainID          *domain.RecordID
+	DestinationBrainID     *domain.RecordID
+	SourceCanonicalID      domain.BrainID
+	SourcePath             domain.QueryPathValue
+	DestinationCanonicalID *domain.BrainID
 	Operation              domain.Operation
 	State                  domain.ExecutionState
 	Route                  RouteSnapshot
 	Result                 ExecutionResultSnapshot
 }
 
-// ExecutionTransitionCommand describes the next persisted execution state.
+// ExecutionTransitionCommand combines a domain-approved lifecycle transition
+// with the typed result snapshot owned by the application boundary. It can be
+// created only through the named transition functions below.
 type ExecutionTransitionCommand struct {
-	State        domain.ExecutionState
-	Result       ExecutionResultSnapshot
-	ErrorCode    *domain.Code
-	ErrorMessage *string
-	StartedAt    *time.Time
-	CompletedAt  *time.Time
+	transition domain.ExecutionTransition
+	result     ExecutionResultSnapshot
+}
+
+func BeginExecutionRead(startedAt time.Time) ExecutionTransitionCommand {
+	return ExecutionTransitionCommand{transition: domain.BeginExecutionRead(startedAt)}
+}
+
+func BeginExecutionProcessing(startedAt time.Time) ExecutionTransitionCommand {
+	return ExecutionTransitionCommand{transition: domain.BeginExecutionProcessing(startedAt)}
+}
+
+func DeliverExecution(result ExecutionResultSnapshot, startedAt, completedAt time.Time) ExecutionTransitionCommand {
+	return ExecutionTransitionCommand{
+		transition: domain.DeliverExecution(nil, startedAt, completedAt),
+		result:     result,
+	}
+}
+
+func FailExecution(code domain.Code, message string, completedAt time.Time) ExecutionTransitionCommand {
+	return ExecutionTransitionCommand{transition: domain.FailExecution(code, message, completedAt)}
+}
+
+func FailExecutionWithResult(result ExecutionResultSnapshot, code domain.Code, message string, startedAt, completedAt time.Time) ExecutionTransitionCommand {
+	return ExecutionTransitionCommand{
+		transition: domain.FailExecutionWithResult(code, message, nil, startedAt, completedAt),
+		result:     result,
+	}
+}
+
+func (command ExecutionTransitionCommand) State() domain.ExecutionState {
+	return command.transition.State()
+}
+
+func (command ExecutionTransitionCommand) Result() ExecutionResultSnapshot {
+	return command.result
+}
+
+func (command ExecutionTransitionCommand) ErrorCode() *domain.Code {
+	return command.transition.ErrorCode()
+}
+
+func (command ExecutionTransitionCommand) ErrorMessage() *string {
+	return command.transition.ErrorMessage()
+}
+
+func (command ExecutionTransitionCommand) StartedAt() *time.Time {
+	return command.transition.StartedAt()
+}
+
+func (command ExecutionTransitionCommand) CompletedAt() *time.Time {
+	return command.transition.CompletedAt()
 }
 
 // ExecutionResultSnapshot is the bounded metadata persisted for a routed result.
@@ -189,11 +237,11 @@ type RouteExecutionSnapshot struct {
 
 // ExecutionHopCommand records one ordered Service occurrence.
 type ExecutionHopCommand struct {
-	ID                 string
-	ExecutionID        string
+	ID                 domain.RecordID
+	ExecutionID        domain.RecordID
 	HopIndex           int
-	ServiceID          *string
-	ServiceCanonicalID string
+	ServiceID          *domain.RecordID
+	ServiceCanonicalID domain.ServiceID
 	Status             domain.HopStatus
 	InputSHA256        string
 	OutputSHA256       string
@@ -209,14 +257,14 @@ type ExecutionSnapshot struct {
 
 // TransferCreateCommand records a pending routed transfer.
 type TransferCreateCommand struct {
-	ID                     string
-	ExecutionID            string
-	SourceBrainID          *string
-	DestinationBrainID     *string
-	SourceCanonicalID      string
-	DestinationCanonicalID string
+	ID                     domain.RecordID
+	ExecutionID            domain.RecordID
+	SourceBrainID          *domain.RecordID
+	DestinationBrainID     *domain.RecordID
+	SourceCanonicalID      domain.BrainID
+	DestinationCanonicalID domain.BrainID
 	StoragePath            string
-	SuggestedObjectKey     string
+	SuggestedObjectKey     domain.ObjectKey
 	SuggestedFilename      string
 	MediaType              string
 	ByteSize               int64
@@ -226,7 +274,7 @@ type TransferCreateCommand struct {
 
 // TransferQuery contains the bounded filters for a transfer list.
 type TransferQuery struct {
-	BrainID   string
+	BrainID   domain.RecordID
 	Direction string
 	Status    domain.TransferStatus
 	Before    *time.Time
@@ -235,10 +283,10 @@ type TransferQuery struct {
 
 // IdempotencySnapshot is the recorded state of one idempotent command.
 type IdempotencySnapshot struct {
-	ID             string
-	UserID         string
+	ID             domain.RecordID
+	UserID         domain.RecordID
 	Scope          string
-	IdempotencyKey string
+	IdempotencyKey domain.IdempotencyKey
 	RequestHash    string
 	ResponseStatus *int
 	ResponseBody   []byte
@@ -253,22 +301,22 @@ type AuditMetadata = domain.AuditMetadata
 
 // AuditRecordCommand records an event and all of its authorized viewers.
 type AuditRecordCommand struct {
-	ID            string
+	ID            domain.RecordID
 	EventType     string
-	ActorUserID   *string
+	ActorUserID   *domain.RecordID
 	ResourceType  string
-	ResourceID    *string
-	BrainID       *string
-	ServiceID     *string
-	ExecutionID   *string
+	ResourceID    *domain.RecordID
+	BrainID       *domain.RecordID
+	ServiceID     *domain.RecordID
+	ExecutionID   *domain.RecordID
 	Status        domain.AuditStatus
 	Metadata      AuditMetadata
-	ViewerUserIDs []string
+	ViewerUserIDs []domain.RecordID
 }
 
 // AuditQuery contains viewer-scoped audit filters.
 type AuditQuery struct {
-	NodeID    string
+	NodeID    domain.Principal
 	EventType string
 	Status    domain.AuditStatus
 	Before    *time.Time
@@ -277,50 +325,50 @@ type AuditQuery struct {
 
 // NetworkRouteSnapshot is the route projection consumed by the network view.
 type NetworkRouteSnapshot struct {
-	RouteID                  string
-	QueryPathID              string
-	SourceBrainID            string
-	SourceCanonicalID        string
+	RouteID                  domain.RecordID
+	QueryPathID              domain.RecordID
+	SourceBrainID            domain.RecordID
+	SourceCanonicalID        domain.BrainID
 	SourceDisplayName        string
-	SourceOwnerUserID        string
-	Path                     string
+	SourceOwnerUserID        domain.RecordID
+	Path                     domain.QueryPathValue
 	Operations               []domain.Operation
 	Visibility               domain.Visibility
 	State                    domain.QueryPathState
 	TerminalMode             domain.TerminalMode
-	DestinationBrainID       *string
-	DestinationCanonicalID   *string
+	DestinationBrainID       *domain.RecordID
+	DestinationCanonicalID   *domain.BrainID
 	DestinationDisplayName   *string
-	DestinationOwnerUserID   *string
-	AllowedBrainOwnerUserIDs []string
+	DestinationOwnerUserID   *domain.RecordID
+	AllowedBrainOwnerUserIDs []domain.RecordID
 	Hops                     []NetworkHopSnapshot
 }
 
 // NetworkHopSnapshot is one ordered hop in a network projection.
 type NetworkHopSnapshot struct {
 	HopIndex    int
-	ServiceID   string
-	CanonicalID string
+	ServiceID   domain.RecordID
+	CanonicalID domain.ServiceID
 	DisplayName string
-	OwnerUserID string
+	OwnerUserID domain.RecordID
 }
 
 // NetworkNodeSnapshot is a searchable Brain or Service projection.
 type NetworkNodeSnapshot struct {
-	ID          string
+	ID          domain.Principal
 	Type        string
 	DisplayName string
-	OwnerUserID string
+	OwnerUserID domain.RecordID
 	Status      domain.NodeStatus
 }
 
 // RouteExecutionResult is returned by pull and push workflows.
 type RouteExecutionResult struct {
-	ExecutionID string
-	RouteID     string
-	Source      string
-	SourcePath  string
-	Destination string
+	ExecutionID domain.RecordID
+	RouteID     domain.RecordID
+	Source      domain.BrainID
+	SourcePath  domain.QueryPathValue
+	Destination domain.BrainID
 	Outcome     string
 	Result      *ExecutionResultSnapshot
 	Transfer    *domain.Transfer
@@ -330,7 +378,7 @@ type RouteExecutionResult struct {
 
 // TransferResolutionResult is returned by accept and reject workflows.
 type TransferResolutionResult struct {
-	TransferID string
+	TransferID domain.RecordID
 	Status     domain.TransferStatus
 	Asset      *domain.Asset
 }

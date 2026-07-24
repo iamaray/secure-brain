@@ -248,9 +248,9 @@ func workflowUploadRequest(t *testing.T, fixture *workflowFixture, objectKey, fi
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/brains/"+fixture.source.CanonicalID+"/assets", &body)
+	request := httptest.NewRequest(http.MethodPost, "/api/brains/"+string(fixture.source.CanonicalID)+"/assets", &body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
-	request.SetPathValue("brainId", fixture.source.CanonicalID)
+	request.SetPathValue("brainId", string(fixture.source.CanonicalID))
 	return request.WithContext(context.WithValue(request.Context(), userKey, fixture.user))
 }
 
@@ -303,7 +303,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load uploaded asset: %v", err)
 		}
-		if persisted.ObjectKey != objectKey || persisted.ProcessingState != domain.AssetStateReady {
+		if persisted.ObjectKey != domain.ObjectKey(objectKey) || persisted.ProcessingState != domain.AssetStateReady {
 			t.Fatalf("unexpected persisted upload: %#v", persisted)
 		}
 		requireCallSequence(t, fixture.objects.takeCalls(), "put")
@@ -323,8 +323,8 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		requireCallSequence(t, fixture.objects.takeCalls(), "put", "delete")
 
 		previewRequest := workflowRequest(http.MethodGet, "/api/brains/x/assets/y/content", fixture.user, nil, map[string]string{
-			"brainId": fixture.source.CanonicalID,
-			"assetId": asset.ID,
+			"brainId": string(fixture.source.CanonicalID),
+			"assetId": string(asset.ID),
 		})
 		response = httptest.NewRecorder()
 		fixture.api.assetContent(response, previewRequest)
@@ -341,8 +341,8 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		requireCallSequence(t, fixture.objects.takeCalls(), "get")
 
 		downloadRequest := workflowRequest(http.MethodGet, "/api/brains/x/assets/y/content?download=true", fixture.user, nil, map[string]string{
-			"brainId": fixture.source.CanonicalID,
-			"assetId": asset.ID,
+			"brainId": string(fixture.source.CanonicalID),
+			"assetId": string(asset.ID),
 		})
 		response = httptest.NewRecorder()
 		fixture.api.assetContent(response, downloadRequest)
@@ -357,7 +357,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		response = httptest.NewRecorder()
 		fixture.api.uploadAsset(response, workflowUploadRequest(t, fixture, failedKey, "failed.txt", "text/plain", []byte("not stored"), false))
 		requireWorkflowStatus(t, response, http.StatusBadGateway)
-		failed, err := fixture.db.GetAssetByObjectKey(ctx, fixture.source.ID, failedKey)
+		failed, err := fixture.db.GetAssetByObjectKey(ctx, fixture.source.ID, domain.ObjectKey(failedKey))
 		if err != nil {
 			t.Fatalf("load failed upload record: %v", err)
 		}
@@ -383,23 +383,23 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 	var queryPath queryPathResponse
 	t.Run("query path save validate enable disable", func(t *testing.T) {
 		body := queryPathRequest{
-			Path: path, AssetIDs: []string{asset.ID},
+			Path: path, AssetIDs: []string{string(asset.ID)},
 			Operations:        []domain.Operation{domain.OperationRawRead, domain.OperationTextSearch},
 			Visibility:        domain.VisibilityPrivate,
-			AllowedBrainIDs:   []string{fixture.destination.CanonicalID},
-			AllowedServiceIDs: []string{fixture.service.CanonicalID},
+			AllowedBrainIDs:   []string{string(fixture.destination.CanonicalID)},
+			AllowedServiceIDs: []string{string(fixture.service.CanonicalID)},
 			Route: &routeDTO{
-				ServiceHops: []string{fixture.service.CanonicalID, fixture.service.CanonicalID},
-				Terminal:    fixture.destination.CanonicalID,
+				ServiceHops: []string{string(fixture.service.CanonicalID), string(fixture.service.CanonicalID)},
+				Terminal:    string(fixture.destination.CanonicalID),
 			},
 			State: domain.QueryPathStateDraft,
 		}
-		request := workflowRequest(http.MethodPost, "/api/brains/x/query-paths", fixture.user, body, map[string]string{"brainId": fixture.source.CanonicalID})
+		request := workflowRequest(http.MethodPost, "/api/brains/x/query-paths", fixture.user, body, map[string]string{"brainId": string(fixture.source.CanonicalID)})
 		response := httptest.NewRecorder()
 		fixture.api.createQueryPath(response, request)
 		requireWorkflowStatus(t, response, http.StatusCreated)
 		queryPath = decodeWorkflowData[queryPathResponse](t, response)
-		config, err := fixture.db.LoadQueryPathConfig(ctx, queryPath.ID)
+		config, err := fixture.db.LoadQueryPathConfig(ctx, domain.RecordID(queryPath.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -409,7 +409,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		}
 
 		validateRequest := workflowRequest(http.MethodPost, "/api/brains/x/query-paths/y/validate", fixture.user, body, map[string]string{
-			"brainId": fixture.source.CanonicalID, "queryPathId": queryPath.ID,
+			"brainId": string(fixture.source.CanonicalID), "queryPathId": queryPath.ID,
 		})
 		response = httptest.NewRecorder()
 		fixture.api.validateQueryPath(response, validateRequest)
@@ -425,7 +425,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		patchState := func(state domain.QueryPathState, version int64) queryPathResponse {
 			t.Helper()
 			request := workflowRequest(http.MethodPatch, "/api/brains/x/query-paths/y", fixture.user, map[string]any{"state": state}, map[string]string{
-				"brainId": fixture.source.CanonicalID, "queryPathId": queryPath.ID,
+				"brainId": string(fixture.source.CanonicalID), "queryPathId": queryPath.ID,
 			})
 			request.Header.Set("If-Match", strconv.FormatInt(version, 10))
 			response := httptest.NewRecorder()
@@ -436,7 +436,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		queryPath = patchState(domain.QueryPathStateEnabled, queryPath.ConfigVersion)
 		queryPath = patchState(domain.QueryPathStateDisabled, queryPath.ConfigVersion)
 		queryPath = patchState(domain.QueryPathStateEnabled, queryPath.ConfigVersion)
-		config, err = fixture.db.LoadQueryPathConfig(ctx, queryPath.ID)
+		config, err = fixture.db.LoadQueryPathConfig(ctx, domain.RecordID(queryPath.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -459,22 +459,22 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		}
 	})
 
-	var pullExecutionID string
+	var pullExecutionID domain.RecordID
 	t.Run("pull execution preserves repeated trace", func(t *testing.T) {
 		request := workflowRequest(http.MethodPost, "/q/x/y", fixture.user, invocationRequest{
-			InitiatingBrainID: fixture.source.CanonicalID,
-			Query:             queryDTO{Operation: query.OperationRawRead},
+			InitiatingBrainID: string(fixture.source.CanonicalID),
+			Query:             queryDTO{Operation: string(query.OperationRawRead)},
 		}, map[string]string{
-			"sourceBrainId": fixture.source.CanonicalID,
+			"sourceBrainId": string(fixture.source.CanonicalID),
 			"queryPath":     strings.TrimPrefix(path, "/"),
 		})
 		response := httptest.NewRecorder()
 		fixture.api.pullQueryPath(response, request)
 		requireWorkflowStatus(t, response, http.StatusOK)
 		result := decodeWorkflowData[struct {
-			ExecutionID string `json:"execution_id"`
-			Outcome     string `json:"outcome"`
-			Text        string `json:"text"`
+			ExecutionID domain.RecordID `json:"execution_id"`
+			Outcome     string          `json:"outcome"`
+			Text        string          `json:"text"`
 		}](t, response)
 		pullExecutionID = result.ExecutionID
 		if result.Outcome != "delivered" || result.Text != "second version" {
@@ -499,7 +499,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 			}
 		}
 		traceRequest := workflowRequest(http.MethodGet, "/api/executions/x/trace", fixture.user, nil,
-			map[string]string{"executionId": pullExecutionID})
+			map[string]string{"executionId": string(pullExecutionID)})
 		response = httptest.NewRecorder()
 		fixture.api.getExecutionTrace(response, traceRequest)
 		requireWorkflowStatus(t, response, http.StatusOK)
@@ -514,7 +514,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 	})
 
 	type sendResult struct {
-		ExecutionID string          `json:"execution_id"`
+		ExecutionID domain.RecordID `json:"execution_id"`
 		Outcome     string          `json:"outcome"`
 		Transfer    domain.Transfer `json:"transfer"`
 	}
@@ -522,7 +522,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		t.Helper()
 		request := workflowRequest(http.MethodPost, "/api/brains/x/query-paths/y/send", fixture.user, map[string]any{
 			"query": query.Request{Operation: query.OperationRawRead},
-		}, map[string]string{"brainId": fixture.source.CanonicalID, "queryPathId": queryPath.ID})
+		}, map[string]string{"brainId": string(fixture.source.CanonicalID), "queryPathId": queryPath.ID})
 		request.Header.Set("Idempotency-Key", key)
 		response := httptest.NewRecorder()
 		fixture.api.sendQueryPath(response, request)
@@ -547,7 +547,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		}
 		mismatchedRequest := workflowRequest(http.MethodPost, "/api/brains/x/query-paths/y/send", fixture.user, map[string]any{
 			"query": query.Request{Operation: query.OperationTextSearch, Query: "different"},
-		}, map[string]string{"brainId": fixture.source.CanonicalID, "queryPathId": queryPath.ID})
+		}, map[string]string{"brainId": string(fixture.source.CanonicalID), "queryPathId": queryPath.ID})
 		mismatchedRequest.Header.Set("Idempotency-Key", key)
 		mismatchedResponse := httptest.NewRecorder()
 		fixture.api.sendQueryPath(mismatchedResponse, mismatchedRequest)
@@ -555,7 +555,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		if calls := fixture.objects.takeCalls(); len(calls) != 0 {
 			t.Fatalf("reused key with different content caused external effects: %#v", calls)
 		}
-		record, err := fixture.db.GetIdempotencyRecord(ctx, fixture.user.ID, "send:"+queryPath.ID, key)
+		record, err := fixture.db.GetIdempotencyRecord(ctx, fixture.user.ID, "send:"+queryPath.ID, domain.IdempotencyKey(key))
 		if err != nil || record.ResponseStatus == nil || *record.ResponseStatus != http.StatusCreated {
 			t.Fatalf("send idempotency record = %#v err=%v", record, err)
 		}
@@ -570,7 +570,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		accept := func() *httptest.ResponseRecorder {
 			request := workflowRequest(http.MethodPost, "/api/transfers/x/accept", fixture.user, map[string]string{
 				"object_key": acceptedObjectKey,
-			}, map[string]string{"transferId": acceptedSend.Transfer.ID})
+			}, map[string]string{"transferId": string(acceptedSend.Transfer.ID)})
 			request.Header.Set("Idempotency-Key", acceptKey)
 			response := httptest.NewRecorder()
 			fixture.api.acceptTransfer(response, request)
@@ -579,9 +579,9 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		response := accept()
 		requireWorkflowStatus(t, response, http.StatusOK)
 		accepted := decodeWorkflowData[struct {
-			TransferID string       `json:"transfer_id"`
-			Status     string       `json:"status"`
-			Asset      domain.Asset `json:"asset"`
+			TransferID domain.RecordID `json:"transfer_id"`
+			Status     string          `json:"status"`
+			Asset      domain.Asset    `json:"asset"`
 		}](t, response)
 		if accepted.TransferID != acceptedSend.Transfer.ID || accepted.Status != "accepted" ||
 			accepted.Asset.BrainID != fixture.destination.ID {
@@ -596,8 +596,8 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		response = accept()
 		requireWorkflowStatus(t, response, http.StatusOK)
 		replay := decodeWorkflowData[struct {
-			TransferID string `json:"transfer_id"`
-			Status     string `json:"status"`
+			TransferID domain.RecordID `json:"transfer_id"`
+			Status     string          `json:"status"`
 		}](t, response)
 		if replay.TransferID != acceptedSend.Transfer.ID || replay.Status != "accepted" {
 			t.Fatalf("unexpected accept replay: %#v", replay)
@@ -608,7 +608,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 
 		rejectKey := "reject-transfer-" + fixture.suffix
 		reject := func() *httptest.ResponseRecorder {
-			request := workflowRequest(http.MethodPost, "/api/transfers/x/reject", fixture.user, nil, map[string]string{"transferId": rejectedSend.Transfer.ID})
+			request := workflowRequest(http.MethodPost, "/api/transfers/x/reject", fixture.user, nil, map[string]string{"transferId": string(rejectedSend.Transfer.ID)})
 			request.Header.Set("Idempotency-Key", rejectKey)
 			response := httptest.NewRecorder()
 			fixture.api.rejectTransfer(response, request)
@@ -617,8 +617,8 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		response = reject()
 		requireWorkflowStatus(t, response, http.StatusOK)
 		rejected := decodeWorkflowData[struct {
-			TransferID string `json:"transfer_id"`
-			Status     string `json:"status"`
+			TransferID domain.RecordID `json:"transfer_id"`
+			Status     string          `json:"status"`
 		}](t, response)
 		if rejected.TransferID != rejectedSend.Transfer.ID || rejected.Status != "rejected" {
 			t.Fatalf("unexpected rejection: %#v", rejected)
@@ -649,8 +649,8 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		for _, route := range network.Routes {
 			if route.QueryPathID == queryPath.ID {
 				found = true
-				if len(route.ServiceHops) != 2 || route.ServiceHops[0] != fixture.service.CanonicalID ||
-					route.ServiceHops[1] != fixture.service.CanonicalID {
+				if len(route.ServiceHops) != 2 || route.ServiceHops[0] != string(fixture.service.CanonicalID) ||
+					route.ServiceHops[1] != string(fixture.service.CanonicalID) {
 					t.Fatalf("network lost repeated hops: %#v", route)
 				}
 			}
@@ -688,17 +688,17 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		}
 
 		connectRequest := workflowRequest(http.MethodPost, "/api/brains/x/app-connections", fixture.user,
-			appConnectionRequest{ServiceID: "app.github"}, map[string]string{"brainId": fixture.source.CanonicalID})
+			appConnectionRequest{ServiceID: "app.github"}, map[string]string{"brainId": string(fixture.source.CanonicalID)})
 		response = httptest.NewRecorder()
 		fixture.api.createAppConnection(response, connectRequest)
 		requireWorkflowStatus(t, response, http.StatusCreated)
 		connected := decodeWorkflowData[appConnectionResponse](t, response)
 		if !connected.Connected || connected.CanonicalID != "app.github" ||
-			!fixture.api.appConnections.contains(fixture.source.ID, "app.github") {
+			!fixture.api.appConnections.contains(string(fixture.source.ID), "app.github") {
 			t.Fatalf("unexpected app connection: %#v", connected)
 		}
 		connectRequest = workflowRequest(http.MethodPost, "/api/brains/x/app-connections", fixture.user,
-			appConnectionRequest{ServiceID: "github"}, map[string]string{"brainId": fixture.source.CanonicalID})
+			appConnectionRequest{ServiceID: "github"}, map[string]string{"brainId": string(fixture.source.CanonicalID)})
 		response = httptest.NewRecorder()
 		fixture.api.createAppConnection(response, connectRequest)
 		requireWorkflowStatus(t, response, http.StatusOK)
@@ -762,7 +762,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 	t.Run("chat provider ordering persistence failure and clear", func(t *testing.T) {
 		post := func(message string) *httptest.ResponseRecorder {
 			request := workflowRequest(http.MethodPost, "/api/brains/x/chat", fixture.user,
-				map[string]string{"message": message}, map[string]string{"brainId": fixture.source.CanonicalID})
+				map[string]string{"message": message}, map[string]string{"brainId": string(fixture.source.CanonicalID)})
 			response := httptest.NewRecorder()
 			fixture.api.postChat(response, request)
 			return response
@@ -801,7 +801,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		}
 
 		clearRequest := workflowRequest(http.MethodDelete, "/api/brains/x/chat", fixture.user, nil,
-			map[string]string{"brainId": fixture.source.CanonicalID})
+			map[string]string{"brainId": string(fixture.source.CanonicalID)})
 		response = httptest.NewRecorder()
 		fixture.api.clearChat(response, clearRequest)
 		requireWorkflowStatus(t, response, http.StatusNoContent)

@@ -36,8 +36,8 @@ func (a *API) listTransfers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "direction must be incoming or outgoing."))
 		return
 	}
-	status := domain.TransferStatus(r.URL.Query().Get("status"))
-	if status != "" && status != domain.TransferStatusPending && status != domain.TransferStatusAccepted && status != domain.TransferStatusRejected && status != domain.TransferStatusExpired {
+	status, parseErr := domain.ParseTransferStatus(r.URL.Query().Get("status"))
+	if parseErr != nil {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "status is invalid."))
 		return
 	}
@@ -87,13 +87,13 @@ func (a *API) getTransfer(w http.ResponseWriter, r *http.Request) {
 			preview.DataBase64 = &encoded
 		}
 		result.Preview = &preview
-		a.audit(r, "transfer.previewed", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusAllowed, application.AuditMetadata{"truncated": truncated}, []string{activeUser(r.Context()).ID})
+		a.audit(r, "transfer.previewed", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusAllowed, application.AuditMetadata{"truncated": truncated}, []domain.RecordID{activeUser(r.Context()).ID})
 	}
 	writeData(w, r, http.StatusOK, result)
 }
 
 func (a *API) visibleTransfer(r *http.Request) (domain.Transfer, bool, error) {
-	transfer, err := a.store.GetTransfer(r.Context(), r.PathValue("transferId"))
+	transfer, err := a.store.GetTransfer(r.Context(), recordIDAtBoundary(r.PathValue("transferId")))
 	if err != nil {
 		return domain.Transfer{}, false, domain.NewError(domain.CodeNodeNotFound, "The transfer does not exist.")
 	}
@@ -127,11 +127,12 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	body.ObjectKey, err = assets.NormalizeObjectKey(body.ObjectKey)
+	objectKey, err := assets.NormalizeObjectKey(body.ObjectKey)
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, err.Error()))
 		return
 	}
+	body.ObjectKey = string(objectKey)
 	requestBytes, _ := json.Marshal(body)
 	record, replay, err := a.startIdempotency(r, "accept:"+r.PathValue("transferId"), key, requestBytes)
 	if err != nil {
@@ -173,7 +174,7 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 			_, _ = tx.MarkTransferExpired(r.Context(), locked.ID, a.now())
 			return domain.NewError(domain.CodeTransferExpired, "The transfer has expired.")
 		}
-		if _, collisionErr := tx.GetAssetByObjectKey(r.Context(), *locked.DestinationBrainID, body.ObjectKey); collisionErr == nil {
+		if _, collisionErr := tx.GetAssetByObjectKey(r.Context(), *locked.DestinationBrainID, objectKey); collisionErr == nil {
 			return domain.NewError(domain.CodeNameAlreadyExists, "An asset already uses that object key.")
 		} else if !errors.Is(collisionErr, pgx.ErrNoRows) {
 			return collisionErr
@@ -191,7 +192,7 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 		if hex.EncodeToString(sum[:]) != locked.SHA256 {
 			return domain.NewError(domain.CodeAssetUnavailable, "The transfer checksum did not match.")
 		}
-		destinationPath := "brains/" + *locked.DestinationBrainID + "/accepted-transfers/" + locked.ID + "/" + locked.SHA256
+		destinationPath := "brains/" + string(*locked.DestinationBrainID) + "/accepted-transfers/" + string(locked.ID) + "/" + locked.SHA256
 		if putErr := a.objects.Put(r.Context(), destinationPath, locked.MediaType, bytes.NewReader(data), int64(len(data)), true); putErr != nil {
 			return putErr
 		}
@@ -204,7 +205,7 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 			format = domain.AssetFormatCSV
 		}
 		checksum := locked.SHA256
-		accepted, lockErr = tx.InsertAsset(r.Context(), application.AssetWriteCommand{ID: assetID, BrainID: *locked.DestinationBrainID, ObjectKey: body.ObjectKey, StoragePath: destinationPath, OriginalFilename: filepath.Base(locked.SuggestedFilename), MediaType: locked.MediaType, ByteSize: locked.ByteSize, SHA256: &checksum, Format: format, ProcessingState: domain.AssetStateReady})
+		accepted, lockErr = tx.InsertAsset(r.Context(), application.AssetWriteCommand{ID: assetID, BrainID: *locked.DestinationBrainID, ObjectKey: objectKey, StoragePath: destinationPath, OriginalFilename: filepath.Base(locked.SuggestedFilename), MediaType: locked.MediaType, ByteSize: locked.ByteSize, SHA256: &checksum, Format: format, ProcessingState: domain.AssetStateReady})
 		if lockErr != nil {
 			return lockErr
 		}
@@ -222,7 +223,7 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 	response := transferResolutionResponse(result)
 	responseBytes, _ := json.Marshal(response)
 	_, _ = a.store.CompleteIdempotencyRecord(r.Context(), record.ID, http.StatusOK, responseBytes)
-	a.audit(r, "transfer.accepted", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, application.AuditMetadata{"accepted_asset_id": accepted.ID}, []string{activeUser(r.Context()).ID})
+	a.audit(r, "transfer.accepted", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, application.AuditMetadata{"accepted_asset_id": accepted.ID}, []domain.RecordID{activeUser(r.Context()).ID})
 	writeData(w, r, http.StatusOK, response)
 }
 
@@ -273,6 +274,6 @@ func (a *API) rejectTransfer(w http.ResponseWriter, r *http.Request) {
 	response := transferResolutionResponse(result)
 	responseBytes, _ := json.Marshal(response)
 	_, _ = a.store.CompleteIdempotencyRecord(r.Context(), record.ID, http.StatusOK, responseBytes)
-	a.audit(r, "transfer.rejected", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, nil, []string{activeUser(r.Context()).ID})
+	a.audit(r, "transfer.rejected", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, nil, []domain.RecordID{activeUser(r.Context()).ID})
 	writeData(w, r, http.StatusOK, response)
 }

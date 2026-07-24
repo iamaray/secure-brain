@@ -15,7 +15,7 @@ import (
 
 func asset(id, name string, format domain.AssetFormat, state domain.AssetProcessingState, body string) Asset {
 	return Asset{Asset: domain.Asset{
-		ID: id, OriginalFilename: name, MediaType: "text/plain",
+		ID: domain.RecordID(id), OriginalFilename: name, MediaType: "text/plain",
 		Format: format, ProcessingState: state,
 	}, Bytes: []byte(body)}
 }

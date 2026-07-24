@@ -184,7 +184,7 @@ func TestQueryPathConfigRoundTripAndVersionConflictIntegration(t *testing.T) {
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	checksum := "0000000000000000000000000000000000000000000000000000000000000000"
 	asset, err := db.InsertAsset(ctx, application.AssetWriteCommand{
-		BrainID: source.ID, ObjectKey: "store-test-" + suffix + ".txt",
+		BrainID: source.ID, ObjectKey: domain.ObjectKey("store-test-" + suffix + ".txt"),
 		StoragePath: "store-tests/" + suffix, OriginalFilename: "store-test.txt",
 		MediaType: "text/plain", ByteSize: 4, SHA256: &checksum,
 		Format: domain.AssetFormatText, ProcessingState: domain.AssetStateReady,
@@ -194,12 +194,12 @@ func TestQueryPathConfigRoundTripAndVersionConflictIntegration(t *testing.T) {
 	}
 
 	created, err := db.CreateQueryPath(ctx, application.QueryPathCommand{
-		BrainID: source.ID, Path: "/store-test-" + suffix,
+		BrainID: source.ID, Path: domain.QueryPathValue("/store-test-" + suffix),
 		Visibility: domain.VisibilityPrivate, State: domain.QueryPathStateEnabled,
-		Operations: []domain.Operation{domain.OperationRawRead}, AssetIDs: []string{asset.ID},
-		AllowedBrainIDs: []string{destination.ID}, AllowedServiceIDs: []string{notion.ID},
+		Operations: []domain.Operation{domain.OperationRawRead}, AssetIDs: []domain.RecordID{asset.ID},
+		AllowedBrainIDs: []domain.RecordID{destination.ID}, AllowedServiceIDs: []domain.RecordID{notion.ID},
 		Route: &application.RouteCommand{TerminalMode: domain.TerminalModeFixed,
-			DestinationBrainID: &destination.ID, ServiceIDs: []string{notion.ID, notion.ID}},
+			DestinationBrainID: &destination.ID, ServiceIDs: []domain.RecordID{notion.ID, notion.ID}},
 	})
 	if err != nil {
 		t.Fatalf("create full query path config: %v", err)
@@ -211,10 +211,10 @@ func TestQueryPathConfigRoundTripAndVersionConflictIntegration(t *testing.T) {
 	replacement := application.QueryPathCommand{
 		BrainID: source.ID, Path: created.QueryPath.Path,
 		Visibility: domain.VisibilityPrivate, State: domain.QueryPathStateEnabled,
-		Operations: []domain.Operation{domain.OperationRawRead}, AssetIDs: []string{asset.ID},
-		AllowedBrainIDs: []string{destination.ID}, AllowedServiceIDs: []string{notion.ID, obsidian.ID},
+		Operations: []domain.Operation{domain.OperationRawRead}, AssetIDs: []domain.RecordID{asset.ID},
+		AllowedBrainIDs: []domain.RecordID{destination.ID}, AllowedServiceIDs: []domain.RecordID{notion.ID, obsidian.ID},
 		Route: &application.RouteCommand{TerminalMode: domain.TerminalModeFixed,
-			DestinationBrainID: &destination.ID, ServiceIDs: []string{notion.ID, obsidian.ID, notion.ID}},
+			DestinationBrainID: &destination.ID, ServiceIDs: []domain.RecordID{notion.ID, obsidian.ID, notion.ID}},
 	}
 	updated, err := db.ReplaceQueryPath(ctx, created.QueryPath.ID, created.QueryPath.ConfigVersion, replacement)
 	if err != nil {

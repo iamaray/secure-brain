@@ -95,7 +95,7 @@ var localAppCatalog = []appDefinition{
 	{ID: "github", CanonicalID: "app.github", DisplayName: "GitHub", Description: "Code and projects", IconPath: "/app-icons/github.svg"},
 }
 
-func (a *API) seedAppConnections(r *http.Request, brainID string) error {
+func (a *API) seedAppConnections(r *http.Request, brainID domain.RecordID) error {
 	routes, err := a.store.ListNetworkRoutes(r.Context())
 	if err != nil {
 		return err
@@ -107,20 +107,20 @@ func (a *API) seedAppConnections(r *http.Request, brainID string) error {
 			continue
 		}
 		for _, hop := range route.Hops {
-			serviceIDs = append(serviceIDs, hop.CanonicalID)
+			serviceIDs = append(serviceIDs, string(hop.CanonicalID))
 		}
 	}
-	a.appConnections.seedOnce(brainID, serviceIDs)
+	a.appConnections.seedOnce(string(brainID), serviceIDs)
 	return nil
 }
 
-func (a *API) appCatalog(brainID string) []appConnectionResponse {
+func (a *API) appCatalog(brainID domain.RecordID) []appConnectionResponse {
 	apps := make([]appConnectionResponse, 0, len(localAppCatalog))
 	for _, app := range localAppCatalog {
 		apps = append(apps, appConnectionResponse{
 			ID: app.ID, ServiceID: app.CanonicalID, CanonicalID: app.CanonicalID,
 			DisplayName: app.DisplayName, Description: app.Description, IconPath: app.IconPath,
-			Connected: a.appConnections.contains(brainID, app.CanonicalID),
+			Connected: a.appConnections.contains(string(brainID), app.CanonicalID),
 		})
 	}
 	return apps
@@ -159,7 +159,7 @@ func (a *API) createAppConnection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	created := a.appConnections.connect(brain.ID, app.CanonicalID)
+	created := a.appConnections.connect(string(brain.ID), app.CanonicalID)
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
@@ -194,7 +194,7 @@ func (a *API) deleteAppConnection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.appConnections.disconnect(brain.ID, app.CanonicalID)
+	a.appConnections.disconnect(string(brain.ID), app.CanonicalID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

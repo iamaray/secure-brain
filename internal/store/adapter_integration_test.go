@@ -37,7 +37,7 @@ func loadIntegrationSeeds(t *testing.T, db *Store) integrationSeeds {
 	ctx := context.Background()
 	getBrain := func(id string) domain.Brain {
 		t.Helper()
-		value, err := db.GetBrainByCanonicalID(ctx, id)
+		value, err := db.GetBrainByCanonicalID(ctx, domain.BrainID(id))
 		if err != nil {
 			t.Fatalf("get seeded Brain %s: %v", id, err)
 		}
@@ -45,7 +45,7 @@ func loadIntegrationSeeds(t *testing.T, db *Store) integrationSeeds {
 	}
 	getService := func(id string) domain.Service {
 		t.Helper()
-		value, err := db.GetServiceByCanonicalID(ctx, id)
+		value, err := db.GetServiceByCanonicalID(ctx, domain.ServiceID(id))
 		if err != nil {
 			t.Fatalf("get seeded Service %s: %v", id, err)
 		}
@@ -60,13 +60,13 @@ func loadIntegrationSeeds(t *testing.T, db *Store) integrationSeeds {
 	}
 }
 
-func insertIntegrationAsset(t *testing.T, db *Store, brainID, key string) domain.Asset {
+func insertIntegrationAsset(t *testing.T, db *Store, brainID domain.RecordID, key string) domain.Asset {
 	t.Helper()
 	checksum := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	parseError := "characterization parse error"
 	asset, err := db.InsertAsset(context.Background(), application.AssetWriteCommand{
 		BrainID:          brainID,
-		ObjectKey:        key,
+		ObjectKey:        domain.ObjectKey(key),
 		StoragePath:      "integration/" + key,
 		OriginalFilename: key,
 		MediaType:        "text/csv",
@@ -85,7 +85,7 @@ func insertIntegrationAsset(t *testing.T, db *Store, brainID, key string) domain
 func insertIntegrationExecution(t *testing.T, db *Store, seeds integrationSeeds, suffix string) application.RouteExecutionSnapshot {
 	t.Helper()
 	sourceID, destinationID := seeds.maya.ID, seeds.atlas.ID
-	actorID := mayaUserID
+	actorID := domain.RecordID(mayaUserID)
 	destinationCanonicalID := seeds.atlas.CanonicalID
 	execution, err := db.InsertExecution(context.Background(), application.ExecutionStartCommand{
 		Mode:                   domain.ExecutionModePush,
@@ -94,14 +94,14 @@ func insertIntegrationExecution(t *testing.T, db *Store, seeds integrationSeeds,
 		SourceBrainID:          &sourceID,
 		DestinationBrainID:     &destinationID,
 		SourceCanonicalID:      seeds.maya.CanonicalID,
-		SourcePath:             "/integration-" + suffix,
+		SourcePath:             domain.QueryPathValue("/integration-" + suffix),
 		DestinationCanonicalID: &destinationCanonicalID,
 		Operation:              domain.OperationRawRead,
 		State:                  domain.ExecutionStateCreated,
 		Route: application.RouteSnapshot{
 			SourceCanonicalID: seeds.maya.CanonicalID,
-			SourcePath:        "/integration-" + suffix,
-			ServiceHops:       []string{seeds.notion.CanonicalID},
+			SourcePath:        domain.QueryPathValue("/integration-" + suffix),
+			ServiceHops:       []domain.ServiceID{seeds.notion.CanonicalID},
 		},
 	})
 	if err != nil {
@@ -121,7 +121,7 @@ func insertIntegrationTransfer(t *testing.T, db *Store, seeds integrationSeeds, 
 		SourceCanonicalID:      seeds.maya.CanonicalID,
 		DestinationCanonicalID: seeds.atlas.CanonicalID,
 		StoragePath:            "transfers/" + suffix,
-		SuggestedObjectKey:     suffix + ".txt",
+		SuggestedObjectKey:     domain.ObjectKey(suffix + ".txt"),
 		SuggestedFilename:      suffix + ".txt",
 		MediaType:              "text/plain",
 		ByteSize:               7,
@@ -147,12 +147,12 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 	if len(users) != 3 || users[0].Handle != "anish" || users[1].Handle != "atlas" || users[2].Handle != "maya" {
 		t.Fatalf("seeded user scan/order = %#v", users)
 	}
-	if got, err := db.GetUser(ctx, mayaUserID); err != nil || got.Handle != "maya" {
+	if got, err := db.GetUser(ctx, domain.RecordID(mayaUserID)); err != nil || got.Handle != "maya" {
 		t.Fatalf("get user = %#v, %v", got, err)
 	}
 
 	token := bytes.Repeat([]byte{0x2a}, 32)
-	session, err := db.CreateSession(ctx, token, mayaUserID, time.Now().Add(time.Hour))
+	session, err := db.CreateSession(ctx, token, domain.RecordID(mayaUserID), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -175,35 +175,35 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 
 	config, err := db.CreateQueryPath(ctx, application.QueryPathCommand{
 		BrainID:           seeds.maya.ID,
-		Path:              "/scanner-ordering",
+		Path:              domain.QueryPathValue("/scanner-ordering"),
 		Visibility:        domain.VisibilityPrivate,
 		State:             domain.QueryPathStateEnabled,
 		Operations:        []domain.Operation{domain.OperationCSVQuery, domain.OperationRawRead},
-		AssetIDs:          []string{second.ID, first.ID},
-		AllowedBrainIDs:   []string{seeds.atlas.ID, seeds.anish.ID},
-		AllowedServiceIDs: []string{seeds.notion.ID, seeds.obsidian.ID},
+		AssetIDs:          []domain.RecordID{second.ID, first.ID},
+		AllowedBrainIDs:   []domain.RecordID{seeds.atlas.ID, seeds.anish.ID},
+		AllowedServiceIDs: []domain.RecordID{seeds.notion.ID, seeds.obsidian.ID},
 		Route: &application.RouteCommand{
 			TerminalMode:       domain.TerminalModeFixed,
 			DestinationBrainID: &seeds.atlas.ID,
-			ServiceIDs:         []string{seeds.obsidian.ID, seeds.notion.ID, seeds.obsidian.ID},
+			ServiceIDs:         []domain.RecordID{seeds.obsidian.ID, seeds.notion.ID, seeds.obsidian.ID},
 		},
 	})
 	if err != nil {
 		t.Fatalf("create ordered query path: %v", err)
 	}
-	if got := []string{config.Assets[0].ID, config.Assets[1].ID}; !slices.Equal(got, []string{second.ID, first.ID}) {
+	if got := []domain.RecordID{config.Assets[0].ID, config.Assets[1].ID}; !slices.Equal(got, []domain.RecordID{second.ID, first.ID}) {
 		t.Fatalf("asset relation order = %v", got)
 	}
-	if got := []string{config.Policy.AllowedBrains[0].CanonicalID, config.Policy.AllowedBrains[1].CanonicalID}; !slices.Equal(got, []string{"brain.anish", "brain.atlas"}) {
+	if got := []domain.BrainID{config.Policy.AllowedBrains[0].CanonicalID, config.Policy.AllowedBrains[1].CanonicalID}; !slices.Equal(got, []domain.BrainID{"brain.anish", "brain.atlas"}) {
 		t.Fatalf("Brain grant order = %v", got)
 	}
-	if got := []string{config.Policy.AllowedServices[0].CanonicalID, config.Policy.AllowedServices[1].CanonicalID}; !slices.Equal(got, []string{"service.notion", "service.obsidian"}) {
+	if got := []domain.ServiceID{config.Policy.AllowedServices[0].CanonicalID, config.Policy.AllowedServices[1].CanonicalID}; !slices.Equal(got, []domain.ServiceID{"service.notion", "service.obsidian"}) {
 		t.Fatalf("Service grant order = %v", got)
 	}
 	if config.Route == nil || config.Route.Route.TerminalMode != domain.TerminalModeFixed {
 		t.Fatalf("route scan = %#v", config.Route)
 	}
-	if got := []string{config.Route.Hops[0].ServiceID, config.Route.Hops[1].ServiceID, config.Route.Hops[2].ServiceID}; !slices.Equal(got, []string{seeds.obsidian.ID, seeds.notion.ID, seeds.obsidian.ID}) {
+	if got := []domain.RecordID{config.Route.Hops[0].ServiceID, config.Route.Hops[1].ServiceID, config.Route.Hops[2].ServiceID}; !slices.Equal(got, []domain.RecordID{seeds.obsidian.ID, seeds.notion.ID, seeds.obsidian.ID}) {
 		t.Fatalf("hop relation order = %v", got)
 	}
 	resolved, err := db.ResolveEnabledQueryPath(ctx, seeds.maya.CanonicalID, config.QueryPath.Path)
@@ -216,17 +216,13 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 	completedAt := startedAt.Add(time.Second)
 	errorCode := domain.CodeInvalidRequest
 	errorMessage := "characterized failure"
-	execution, err = db.UpdateExecutionState(ctx, execution.ID, application.ExecutionTransitionCommand{
-		State: domain.ExecutionStateFailed,
-		Result: application.ExecutionResultSnapshot{
+	execution, err = db.TransitionExecution(ctx, execution.ID, application.FailExecutionWithResult(
+		application.ExecutionResultSnapshot{
 			MediaType: "application/json", ByteSize: 1,
 			SuggestedFilename: "attempt.json", SHA256: fmt.Sprintf("%064d", 1),
 		},
-		ErrorCode:    &errorCode,
-		ErrorMessage: &errorMessage,
-		StartedAt:    &startedAt,
-		CompletedAt:  &completedAt,
-	})
+		errorCode, errorMessage, startedAt, completedAt,
+	))
 	if err != nil {
 		t.Fatalf("update execution: %v", err)
 	}
@@ -266,7 +262,7 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 		t.Fatalf("transfer scan = %#v, %v", loaded, err)
 	}
 
-	auditID := "40000000-0000-4000-8000-000000000001"
+	auditID := domain.RecordID("40000000-0000-4000-8000-000000000001")
 	event, err := db.InsertAuditEvent(ctx, application.AuditRecordCommand{
 		ID:            auditID,
 		EventType:     "integration.scanner",
@@ -276,31 +272,31 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 		BrainID:       &seeds.maya.ID,
 		Status:        domain.AuditStatusSucceeded,
 		Metadata:      application.AuditMetadata{"scanner": true},
-		ViewerUserIDs: []string{mayaUserID, mayaUserID, atlasUserID},
+		ViewerUserIDs: []domain.RecordID{mayaUserID, mayaUserID, atlasUserID},
 	})
 	if err != nil || event.Metadata["scanner"] != true {
 		t.Fatalf("insert audit event = %#v, %v", event, err)
 	}
-	for _, viewer := range []string{mayaUserID, atlasUserID} {
-		events, err := db.ListAuditEvents(ctx, viewer, application.AuditQuery{NodeID: seeds.maya.CanonicalID})
+	for _, viewer := range []domain.RecordID{mayaUserID, atlasUserID} {
+		events, err := db.ListAuditEvents(ctx, viewer, application.AuditQuery{NodeID: domain.Principal(seeds.maya.CanonicalID)})
 		if err != nil || len(events) != 1 || events[0].ID != auditID {
 			t.Fatalf("audit viewer %s = %#v, %v", viewer, events, err)
 		}
 	}
-	if events, err := db.ListAuditEvents(ctx, anishUserID, application.AuditQuery{}); err != nil || len(events) != 0 {
+	if events, err := db.ListAuditEvents(ctx, domain.RecordID(anishUserID), application.AuditQuery{}); err != nil || len(events) != 0 {
 		t.Fatalf("non-viewer audit events = %#v, %v", events, err)
 	}
 
-	pair, err := db.InsertChatPair(ctx, seeds.maya.ID, mayaUserID, "question", "answer", "gpt-test")
+	pair, err := db.InsertChatPair(ctx, seeds.maya.ID, domain.RecordID(mayaUserID), "question", "answer", "gpt-test")
 	if err != nil || len(pair) != 2 || pair[0].Role != domain.ChatRoleUser || pair[1].Role != domain.ChatRoleAssistant {
 		t.Fatalf("chat pair scans = %#v, %v", pair, err)
 	}
-	messages, err := db.ListChatMessages(ctx, seeds.maya.ID, mayaUserID, 20)
+	messages, err := db.ListChatMessages(ctx, seeds.maya.ID, domain.RecordID(mayaUserID), 20)
 	if err != nil || len(messages) != 2 || messages[0].Content != "question" || messages[1].Content != "answer" {
 		t.Fatalf("chat message scans/order = %#v, %v", messages, err)
 	}
 
-	record, err := db.CreateIdempotencyRecord(ctx, mayaUserID, "integration", "scanner-key", fmt.Sprintf("%064d", 9), time.Now().Add(time.Hour))
+	record, err := db.CreateIdempotencyRecord(ctx, domain.RecordID(mayaUserID), "integration", domain.IdempotencyKey("scanner-key"), fmt.Sprintf("%064d", 9), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("create idempotency record: %v", err)
 	}
@@ -308,7 +304,7 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 	if err != nil || record.ResponseStatus == nil || *record.ResponseStatus != 201 {
 		t.Fatalf("complete idempotency scan = %#v, %v", record, err)
 	}
-	loadedRecord, err := db.GetIdempotencyRecord(ctx, mayaUserID, "integration", "scanner-key")
+	loadedRecord, err := db.GetIdempotencyRecord(ctx, domain.RecordID(mayaUserID), "integration", domain.IdempotencyKey("scanner-key"))
 	var responseBody map[string]string
 	if err == nil {
 		err = json.Unmarshal(loadedRecord.ResponseBody, &responseBody)
@@ -328,7 +324,7 @@ func TestPersistedRecordsAndRelationOrderingIntegration(t *testing.T) {
 		}
 	}
 	if networkRoute == nil ||
-		!slices.Equal(networkRoute.AllowedBrainOwnerUserIDs, []string{anishUserID, atlasUserID}) ||
+		!slices.Equal(networkRoute.AllowedBrainOwnerUserIDs, []domain.RecordID{anishUserID, atlasUserID}) ||
 		len(networkRoute.Hops) != 3 ||
 		networkRoute.Hops[0].CanonicalID != seeds.obsidian.CanonicalID {
 		t.Fatalf("network route scans/order = %#v", networkRoute)
@@ -371,11 +367,11 @@ func TestOwnershipQueriesAndConfigurationConflictsIntegration(t *testing.T) {
 
 	input := application.QueryPathCommand{
 		BrainID:    seeds.maya.ID,
-		Path:       "/configuration-conflict",
+		Path:       domain.QueryPathValue("/configuration-conflict"),
 		Visibility: domain.VisibilityPrivate,
 		State:      domain.QueryPathStateDraft,
 		Operations: []domain.Operation{domain.OperationRawRead},
-		AssetIDs:   []string{asset.ID},
+		AssetIDs:   []domain.RecordID{asset.ID},
 	}
 	created, err := db.CreateQueryPath(ctx, input)
 	if err != nil {
@@ -453,13 +449,13 @@ func TestTransferLifecycleAndIdempotencyCollisionsIntegration(t *testing.T) {
 
 	hashA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	hashB := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	first, err := db.CreateIdempotencyRecord(ctx, mayaUserID, "transfer:accept", "collision-key", hashA, now.Add(time.Hour))
+	first, err := db.CreateIdempotencyRecord(ctx, domain.RecordID(mayaUserID), "transfer:accept", domain.IdempotencyKey("collision-key"), hashA, now.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("create idempotency record: %v", err)
 	}
 	for name, hash := range map[string]string{"same request": hashA, "different request": hashB} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := db.CreateIdempotencyRecord(ctx, mayaUserID, "transfer:accept", "collision-key", hash, now.Add(time.Hour)); !errors.Is(err, ErrIdempotencyExists) {
+			if _, err := db.CreateIdempotencyRecord(ctx, domain.RecordID(mayaUserID), "transfer:accept", domain.IdempotencyKey("collision-key"), hash, now.Add(time.Hour)); !errors.Is(err, ErrIdempotencyExists) {
 				t.Fatalf("collision error = %v, want ErrIdempotencyExists", err)
 			}
 		})
@@ -470,7 +466,7 @@ func TestTransferLifecycleAndIdempotencyCollisionsIntegration(t *testing.T) {
 	if _, err := db.CompleteIdempotencyRecord(ctx, first.ID, 201, []byte(`{"ok":false}`)); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("second completion error = %v, want pgx.ErrNoRows", err)
 	}
-	if _, err := db.CreateIdempotencyRecord(ctx, mayaUserID, "transfer:reject", "collision-key", hashB, now.Add(time.Hour)); err != nil {
+	if _, err := db.CreateIdempotencyRecord(ctx, domain.RecordID(mayaUserID), "transfer:reject", domain.IdempotencyKey("collision-key"), hashB, now.Add(time.Hour)); err != nil {
 		t.Fatalf("same key in another scope should succeed: %v", err)
 	}
 }
@@ -489,12 +485,12 @@ func TestAuditAndTransferPaginationTiesIntegration(t *testing.T) {
 	}
 	for _, id := range auditIDs {
 		if _, err := db.InsertAuditEvent(ctx, application.AuditRecordCommand{
-			ID:            id,
+			ID:            domain.RecordID(id),
 			EventType:     "pagination.tie",
 			ResourceType:  "brain",
 			BrainID:       &seeds.maya.ID,
 			Status:        domain.AuditStatusSucceeded,
-			ViewerUserIDs: []string{mayaUserID},
+			ViewerUserIDs: []domain.RecordID{mayaUserID},
 		}); err != nil {
 			t.Fatalf("insert tied audit %s: %v", id, err)
 		}
@@ -502,14 +498,14 @@ func TestAuditAndTransferPaginationTiesIntegration(t *testing.T) {
 	if _, err := db.db.Exec(ctx, `update public.audit_events set created_at = $1 where id = any($2::uuid[])`, tiedAt, auditIDs); err != nil {
 		t.Fatalf("tie audit timestamps: %v", err)
 	}
-	events, err := db.ListAuditEvents(ctx, mayaUserID, application.AuditQuery{EventType: "pagination.tie", Limit: 2})
+	events, err := db.ListAuditEvents(ctx, domain.RecordID(mayaUserID), application.AuditQuery{EventType: "pagination.tie", Limit: 2})
 	if err != nil {
 		t.Fatalf("list tied audits: %v", err)
 	}
-	if got := []string{events[0].ID, events[1].ID}; !slices.Equal(got, []string{auditIDs[2], auditIDs[1]}) {
+	if got := []domain.RecordID{events[0].ID, events[1].ID}; !slices.Equal(got, []domain.RecordID{domain.RecordID(auditIDs[2]), domain.RecordID(auditIDs[1])}) {
 		t.Fatalf("audit tie order = %v", got)
 	}
-	events, err = db.ListAuditEvents(ctx, mayaUserID, application.AuditQuery{EventType: "pagination.tie", Before: &tiedAt, Limit: 10})
+	events, err = db.ListAuditEvents(ctx, domain.RecordID(mayaUserID), application.AuditQuery{EventType: "pagination.tie", Before: &tiedAt, Limit: 10})
 	if err != nil || len(events) != 0 {
 		t.Fatalf("timestamp-only audit cursor at tie = %#v, %v", events, err)
 	}
@@ -518,7 +514,7 @@ func TestAuditAndTransferPaginationTiesIntegration(t *testing.T) {
 	for i := range transfers {
 		transfers[i] = insertIntegrationTransfer(t, db, seeds, fmt.Sprintf("pagination-%d", i), tiedAt.Add(time.Hour))
 	}
-	transferIDs := []string{transfers[0].ID, transfers[1].ID, transfers[2].ID}
+	transferIDs := []domain.RecordID{transfers[0].ID, transfers[1].ID, transfers[2].ID}
 	if _, err := db.db.Exec(ctx, `update public.transfers set created_at = $1 where id = any($2::uuid[])`, tiedAt, transferIDs); err != nil {
 		t.Fatalf("tie transfer timestamps: %v", err)
 	}
@@ -526,10 +522,10 @@ func TestAuditAndTransferPaginationTiesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tied transfers: %v", err)
 	}
-	wantTransferIDs := append([]string(nil), transferIDs...)
+	wantTransferIDs := append([]domain.RecordID(nil), transferIDs...)
 	slices.Sort(wantTransferIDs)
 	slices.Reverse(wantTransferIDs)
-	if got := []string{listed[0].ID, listed[1].ID, listed[2].ID}; !slices.Equal(got, wantTransferIDs) {
+	if got := []domain.RecordID{listed[0].ID, listed[1].ID, listed[2].ID}; !slices.Equal(got, wantTransferIDs) {
 		t.Fatalf("transfer tie order = %v, want %v", got, wantTransferIDs)
 	}
 	listed, err = db.ListTransfers(ctx, application.TransferQuery{BrainID: seeds.atlas.ID, Direction: "incoming", Before: &tiedAt, Limit: 10})
@@ -543,32 +539,32 @@ func TestEnabledRouteDeleteGuardsIntegration(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	source, err := db.CreateBrain(ctx, mayaUserID, "guard-source", "Guard source")
+	source, err := db.CreateBrain(ctx, domain.RecordID(mayaUserID), "guard-source", "Guard source")
 	if err != nil {
 		t.Fatalf("create guard source: %v", err)
 	}
-	destination, err := db.CreateBrain(ctx, atlasUserID, "guard-destination", "Guard destination")
+	destination, err := db.CreateBrain(ctx, domain.RecordID(atlasUserID), "guard-destination", "Guard destination")
 	if err != nil {
 		t.Fatalf("create guard destination: %v", err)
 	}
-	service, err := db.CreateService(ctx, anishUserID, "guard-service", "Guard service")
+	service, err := db.CreateService(ctx, domain.RecordID(anishUserID), "guard-service", "Guard service")
 	if err != nil {
 		t.Fatalf("create guard service: %v", err)
 	}
 	asset := insertIntegrationAsset(t, db, source.ID, "guard.csv")
 	_, err = db.CreateQueryPath(ctx, application.QueryPathCommand{
 		BrainID:           source.ID,
-		Path:              "/delete-guards",
+		Path:              domain.QueryPathValue("/delete-guards"),
 		Visibility:        domain.VisibilityPrivate,
 		State:             domain.QueryPathStateEnabled,
 		Operations:        []domain.Operation{domain.OperationRawRead},
-		AssetIDs:          []string{asset.ID},
-		AllowedBrainIDs:   []string{destination.ID},
-		AllowedServiceIDs: []string{service.ID},
+		AssetIDs:          []domain.RecordID{asset.ID},
+		AllowedBrainIDs:   []domain.RecordID{destination.ID},
+		AllowedServiceIDs: []domain.RecordID{service.ID},
 		Route: &application.RouteCommand{
 			TerminalMode:       domain.TerminalModeFixed,
 			DestinationBrainID: &destination.ID,
-			ServiceIDs:         []string{service.ID},
+			ServiceIDs:         []domain.RecordID{service.ID},
 		},
 	})
 	if err != nil {

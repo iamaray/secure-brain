@@ -22,7 +22,7 @@ func scanService(row interface{ Scan(...any) error }) (domain.Service, error) {
 	return service, err
 }
 
-func (s *Store) CreateBrain(ctx context.Context, ownerUserID, slug, displayName string) (domain.Brain, error) {
+func (s *Store) CreateBrain(ctx context.Context, ownerUserID domain.RecordID, slug, displayName string) (domain.Brain, error) {
 	brain, err := scanBrain(s.db.QueryRow(ctx, `
 		insert into public.brains (owner_user_id, slug, display_name)
 		values ($1, $2, $3)
@@ -35,7 +35,7 @@ func (s *Store) CreateBrain(ctx context.Context, ownerUserID, slug, displayName 
 }
 
 // ListBrains returns all Brains when ownerUserID is nil, or the owner's Brains otherwise.
-func (s *Store) ListBrains(ctx context.Context, ownerUserID *string) ([]domain.Brain, error) {
+func (s *Store) ListBrains(ctx context.Context, ownerUserID *domain.RecordID) ([]domain.Brain, error) {
 	rows, err := s.db.Query(ctx, `
 		select id, owner_user_id, slug, canonical_id, display_name, status, created_at, updated_at
 		from public.brains
@@ -60,7 +60,7 @@ func (s *Store) ListBrains(ctx context.Context, ownerUserID *string) ([]domain.B
 	return brains, nil
 }
 
-func (s *Store) GetBrain(ctx context.Context, id string) (domain.Brain, error) {
+func (s *Store) GetBrain(ctx context.Context, id domain.RecordID) (domain.Brain, error) {
 	brain, err := scanBrain(s.db.QueryRow(ctx, `
 		select id, owner_user_id, slug, canonical_id, display_name, status, created_at, updated_at
 		from public.brains where id = $1
@@ -71,7 +71,7 @@ func (s *Store) GetBrain(ctx context.Context, id string) (domain.Brain, error) {
 	return brain, nil
 }
 
-func (s *Store) GetBrainByCanonicalID(ctx context.Context, canonicalID string) (domain.Brain, error) {
+func (s *Store) GetBrainByCanonicalID(ctx context.Context, canonicalID domain.BrainID) (domain.Brain, error) {
 	brain, err := scanBrain(s.db.QueryRow(ctx, `
 		select id, owner_user_id, slug, canonical_id, display_name, status, created_at, updated_at
 		from public.brains where canonical_id = $1
@@ -82,7 +82,7 @@ func (s *Store) GetBrainByCanonicalID(ctx context.Context, canonicalID string) (
 	return brain, nil
 }
 
-func (s *Store) DeleteBrain(ctx context.Context, id string) (bool, error) {
+func (s *Store) DeleteBrain(ctx context.Context, id domain.RecordID) (bool, error) {
 	tag, err := s.db.Exec(ctx, `delete from public.brains where id = $1`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete brain: %w", err)
@@ -90,7 +90,7 @@ func (s *Store) DeleteBrain(ctx context.Context, id string) (bool, error) {
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s *Store) CreateService(ctx context.Context, ownerUserID, slug, displayName string) (domain.Service, error) {
+func (s *Store) CreateService(ctx context.Context, ownerUserID domain.RecordID, slug, displayName string) (domain.Service, error) {
 	service, err := scanService(s.db.QueryRow(ctx, `
 		insert into public.services (owner_user_id, slug, display_name)
 		values ($1, $2, $3)
@@ -102,7 +102,7 @@ func (s *Store) CreateService(ctx context.Context, ownerUserID, slug, displayNam
 	return service, nil
 }
 
-func (s *Store) ListServices(ctx context.Context, ownerUserID *string) ([]domain.Service, error) {
+func (s *Store) ListServices(ctx context.Context, ownerUserID *domain.RecordID) ([]domain.Service, error) {
 	rows, err := s.db.Query(ctx, `
 		select id, owner_user_id, slug, canonical_id, display_name, status, capability_tags, created_at, updated_at
 		from public.services
@@ -127,7 +127,7 @@ func (s *Store) ListServices(ctx context.Context, ownerUserID *string) ([]domain
 	return services, nil
 }
 
-func (s *Store) GetService(ctx context.Context, id string) (domain.Service, error) {
+func (s *Store) GetService(ctx context.Context, id domain.RecordID) (domain.Service, error) {
 	service, err := scanService(s.db.QueryRow(ctx, `
 		select id, owner_user_id, slug, canonical_id, display_name, status, capability_tags, created_at, updated_at
 		from public.services where id = $1
@@ -138,7 +138,7 @@ func (s *Store) GetService(ctx context.Context, id string) (domain.Service, erro
 	return service, nil
 }
 
-func (s *Store) GetServiceByCanonicalID(ctx context.Context, canonicalID string) (domain.Service, error) {
+func (s *Store) GetServiceByCanonicalID(ctx context.Context, canonicalID domain.ServiceID) (domain.Service, error) {
 	service, err := scanService(s.db.QueryRow(ctx, `
 		select id, owner_user_id, slug, canonical_id, display_name, status, capability_tags, created_at, updated_at
 		from public.services where canonical_id = $1
@@ -149,7 +149,7 @@ func (s *Store) GetServiceByCanonicalID(ctx context.Context, canonicalID string)
 	return service, nil
 }
 
-func (s *Store) DeleteService(ctx context.Context, id string) (bool, error) {
+func (s *Store) DeleteService(ctx context.Context, id domain.RecordID) (bool, error) {
 	tag, err := s.db.Exec(ctx, `delete from public.services where id = $1`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete service: %w", err)

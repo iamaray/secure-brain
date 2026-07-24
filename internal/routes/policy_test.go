@@ -181,9 +181,9 @@ func TestResolveTerminal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ResolveTerminal(tt.mode, tt.terminal, tt.source, tt.init)
+			got, err := ResolveTerminal(tt.mode, tt.terminal, domain.BrainID(tt.source), domain.BrainID(tt.init))
 			if tt.code == "" {
-				if err != nil || got != tt.want {
+				if err != nil || string(got) != tt.want {
 					t.Fatalf("got (%q,%v), want (%q,nil)", got, err, tt.want)
 				}
 				return
@@ -199,8 +199,8 @@ func TestAuthorizeMatrix(t *testing.T) {
 	base := AuthorizationInput{
 		Mode: domain.ExecutionModePull, SourceBrainID: "brain.source",
 		InitiatingBrainID: "brain.caller", InitiatorOwned: true, InitiatorRegistered: true,
-		Terminal: "caller", BrainGrants: []string{"brain.caller", "brain.dest"},
-		ServiceGrants: []string{"service.one"}, ServiceHops: []string{"service.one", "service.one"},
+		Terminal: "caller", BrainGrants: []domain.BrainID{"brain.caller", "brain.dest"},
+		ServiceGrants: []domain.ServiceID{"service.one"}, ServiceHops: []domain.ServiceID{"service.one", "service.one"},
 	}
 	tests := []struct {
 		name   string
@@ -247,13 +247,13 @@ func TestAuthorizeMatrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := base
-			in.BrainGrants = append([]string(nil), base.BrainGrants...)
-			in.ServiceGrants = append([]string(nil), base.ServiceGrants...)
-			in.ServiceHops = append([]string(nil), base.ServiceHops...)
+			in.BrainGrants = append([]domain.BrainID(nil), base.BrainGrants...)
+			in.ServiceGrants = append([]domain.ServiceID(nil), base.ServiceGrants...)
+			in.ServiceHops = append([]domain.ServiceID(nil), base.ServiceHops...)
 			tt.mutate(&in)
 			got, err := Authorize(in)
 			if tt.code == "" {
-				if err != nil || got != tt.want {
+				if err != nil || string(got) != tt.want {
 					t.Fatalf("got (%q,%v), want (%q,nil)", got, err, tt.want)
 				}
 				return

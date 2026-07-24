@@ -109,17 +109,17 @@ const (
 )
 
 type User struct {
-	ID          string    `json:"id"`
+	ID          RecordID  `json:"id"`
 	Handle      string    `json:"handle"`
 	DisplayName string    `json:"display_name"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
 type Brain struct {
-	ID          string     `json:"id"`
-	OwnerUserID string     `json:"owner_user_id,omitempty"`
+	ID          RecordID   `json:"id"`
+	OwnerUserID RecordID   `json:"owner_user_id,omitempty"`
 	Slug        string     `json:"slug"`
-	CanonicalID string     `json:"canonical_id"`
+	CanonicalID BrainID    `json:"canonical_id"`
 	DisplayName string     `json:"display_name"`
 	Status      NodeStatus `json:"status"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -127,10 +127,10 @@ type Brain struct {
 }
 
 type Service struct {
-	ID             string     `json:"id"`
-	OwnerUserID    string     `json:"owner_user_id,omitempty"`
+	ID             RecordID   `json:"id"`
+	OwnerUserID    RecordID   `json:"owner_user_id,omitempty"`
 	Slug           string     `json:"slug"`
-	CanonicalID    string     `json:"canonical_id"`
+	CanonicalID    ServiceID  `json:"canonical_id"`
 	DisplayName    string     `json:"display_name"`
 	Status         NodeStatus `json:"status"`
 	CapabilityTags []string   `json:"capability_tags"`
@@ -139,18 +139,18 @@ type Service struct {
 }
 
 type MockSession struct {
-	ID         string    `json:"id"`
+	ID         RecordID  `json:"id"`
 	TokenHash  []byte    `json:"-"`
-	UserID     string    `json:"user_id"`
+	UserID     RecordID  `json:"user_id"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastSeenAt time.Time `json:"last_seen_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type Asset struct {
-	ID               string               `json:"id"`
-	BrainID          string               `json:"brain_id"`
-	ObjectKey        string               `json:"object_key"`
+	ID               RecordID             `json:"id"`
+	BrainID          RecordID             `json:"brain_id"`
+	ObjectKey        ObjectKey            `json:"object_key"`
 	StoragePath      string               `json:"-"`
 	OriginalFilename string               `json:"original_filename"`
 	MediaType        string               `json:"media_type"`
@@ -164,9 +164,9 @@ type Asset struct {
 }
 
 type QueryPath struct {
-	ID            string         `json:"id"`
-	BrainID       string         `json:"brain_id"`
-	Path          string         `json:"path"`
+	ID            RecordID       `json:"id"`
+	BrainID       RecordID       `json:"brain_id"`
+	Path          QueryPathValue `json:"path"`
 	Visibility    Visibility     `json:"visibility"`
 	State         QueryPathState `json:"state"`
 	Operations    []Operation    `json:"operations"`
@@ -176,37 +176,37 @@ type QueryPath struct {
 }
 
 type QueryPathAsset struct {
-	QueryPathID string `json:"query_path_id"`
-	AssetID     string `json:"asset_id"`
-	Position    int    `json:"position"`
+	QueryPathID RecordID `json:"query_path_id"`
+	AssetID     RecordID `json:"asset_id"`
+	Position    int      `json:"position"`
 }
 
 type Route struct {
-	ID                 string       `json:"id"`
-	QueryPathID        string       `json:"query_path_id"`
+	ID                 RecordID     `json:"id"`
+	QueryPathID        RecordID     `json:"query_path_id"`
 	TerminalMode       TerminalMode `json:"terminal_mode"`
-	DestinationBrainID *string      `json:"destination_brain_id,omitempty"`
+	DestinationBrainID *RecordID    `json:"destination_brain_id,omitempty"`
 	CreatedAt          time.Time    `json:"created_at"`
 	UpdatedAt          time.Time    `json:"updated_at"`
 }
 
 type RouteHop struct {
-	RouteID   string `json:"route_id"`
-	HopIndex  int    `json:"hop_index"`
-	ServiceID string `json:"service_id"`
+	RouteID   RecordID `json:"route_id"`
+	HopIndex  int      `json:"hop_index"`
+	ServiceID RecordID `json:"service_id"`
 }
 
 type RouteExecution struct {
-	ID                     string         `json:"id"`
+	ID                     RecordID       `json:"id"`
 	Mode                   ExecutionMode  `json:"mode"`
-	QueryPathID            *string        `json:"query_path_id,omitempty"`
-	ActorUserID            *string        `json:"actor_user_id,omitempty"`
-	InitiatingBrainID      *string        `json:"initiating_brain_id,omitempty"`
-	SourceBrainID          *string        `json:"source_brain_id,omitempty"`
-	DestinationBrainID     *string        `json:"destination_brain_id,omitempty"`
-	SourceCanonicalID      string         `json:"source_canonical_id"`
-	SourcePath             string         `json:"source_path"`
-	DestinationCanonicalID *string        `json:"destination_canonical_id,omitempty"`
+	QueryPathID            *RecordID      `json:"query_path_id,omitempty"`
+	ActorUserID            *RecordID      `json:"actor_user_id,omitempty"`
+	InitiatingBrainID      *RecordID      `json:"initiating_brain_id,omitempty"`
+	SourceBrainID          *RecordID      `json:"source_brain_id,omitempty"`
+	DestinationBrainID     *RecordID      `json:"destination_brain_id,omitempty"`
+	SourceCanonicalID      BrainID        `json:"source_canonical_id"`
+	SourcePath             QueryPathValue `json:"source_path"`
+	DestinationCanonicalID *BrainID       `json:"destination_canonical_id,omitempty"`
 	Operation              Operation      `json:"operation"`
 	State                  ExecutionState `json:"state"`
 	ErrorCode              *Code          `json:"error_code,omitempty"`
@@ -217,11 +217,11 @@ type RouteExecution struct {
 }
 
 type ExecutionHop struct {
-	ID                 string    `json:"id"`
-	ExecutionID        string    `json:"execution_id"`
+	ID                 RecordID  `json:"id"`
+	ExecutionID        RecordID  `json:"execution_id"`
 	HopIndex           int       `json:"hop_index"`
-	ServiceID          *string   `json:"service_id,omitempty"`
-	ServiceCanonicalID string    `json:"service_canonical_id"`
+	ServiceID          *RecordID `json:"service_id,omitempty"`
+	ServiceCanonicalID ServiceID `json:"service_canonical_id"`
 	Status             HopStatus `json:"status"`
 	InputSHA256        string    `json:"input_sha256"`
 	OutputSHA256       string    `json:"output_sha256"`
@@ -231,29 +231,29 @@ type ExecutionHop struct {
 }
 
 type Transfer struct {
-	ID                     string         `json:"id"`
-	ExecutionID            string         `json:"execution_id"`
-	SourceBrainID          *string        `json:"source_brain_id,omitempty"`
-	DestinationBrainID     *string        `json:"destination_brain_id,omitempty"`
-	SourceCanonicalID      string         `json:"source_canonical_id"`
-	DestinationCanonicalID string         `json:"destination_canonical_id"`
+	ID                     RecordID       `json:"id"`
+	ExecutionID            RecordID       `json:"execution_id"`
+	SourceBrainID          *RecordID      `json:"source_brain_id,omitempty"`
+	DestinationBrainID     *RecordID      `json:"destination_brain_id,omitempty"`
+	SourceCanonicalID      BrainID        `json:"source_canonical_id"`
+	DestinationCanonicalID BrainID        `json:"destination_canonical_id"`
 	Status                 TransferStatus `json:"status"`
 	StoragePath            string         `json:"-"`
-	SuggestedObjectKey     string         `json:"suggested_object_key"`
+	SuggestedObjectKey     ObjectKey      `json:"suggested_object_key"`
 	SuggestedFilename      string         `json:"suggested_filename"`
 	MediaType              string         `json:"media_type"`
 	ByteSize               int64          `json:"byte_size"`
 	SHA256                 string         `json:"sha256"`
-	AcceptedAssetID        *string        `json:"accepted_asset_id,omitempty"`
+	AcceptedAssetID        *RecordID      `json:"accepted_asset_id,omitempty"`
 	CreatedAt              time.Time      `json:"created_at"`
 	ExpiresAt              time.Time      `json:"expires_at"`
 	ResolvedAt             *time.Time     `json:"resolved_at,omitempty"`
 }
 
 type ChatMessage struct {
-	ID        string    `json:"id"`
-	BrainID   string    `json:"brain_id"`
-	UserID    string    `json:"user_id"`
+	ID        RecordID  `json:"id"`
+	BrainID   RecordID  `json:"brain_id"`
+	UserID    RecordID  `json:"user_id"`
 	Role      ChatRole  `json:"role"`
 	Content   string    `json:"content"`
 	Model     *string   `json:"model,omitempty"`
@@ -261,14 +261,14 @@ type ChatMessage struct {
 }
 
 type AuditEvent struct {
-	ID           string        `json:"id"`
+	ID           RecordID      `json:"id"`
 	EventType    string        `json:"event_type"`
-	ActorUserID  *string       `json:"actor_user_id,omitempty"`
+	ActorUserID  *RecordID     `json:"actor_user_id,omitempty"`
 	ResourceType string        `json:"resource_type"`
-	ResourceID   *string       `json:"resource_id,omitempty"`
-	BrainID      *string       `json:"brain_id,omitempty"`
-	ServiceID    *string       `json:"service_id,omitempty"`
-	ExecutionID  *string       `json:"execution_id,omitempty"`
+	ResourceID   *RecordID     `json:"resource_id,omitempty"`
+	BrainID      *RecordID     `json:"brain_id,omitempty"`
+	ServiceID    *RecordID     `json:"service_id,omitempty"`
+	ExecutionID  *RecordID     `json:"execution_id,omitempty"`
 	Status       AuditStatus   `json:"status"`
 	Metadata     AuditMetadata `json:"metadata"`
 	CreatedAt    time.Time     `json:"created_at"`

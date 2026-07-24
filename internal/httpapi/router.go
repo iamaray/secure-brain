@@ -172,8 +172,9 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	user, err := a.store.GetUser(r.Context(), body.UserID)
-	if err != nil {
+	userID, parseErr := domain.ParseRecordID(body.UserID)
+	user, err := a.store.GetUser(r.Context(), userID)
+	if parseErr != nil || err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The selected demo user does not exist."))
 		return
 	}
@@ -192,7 +193,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		ResourceType: "session", ResourceID: &session.ID,
 		Status:        domain.AuditStatusSucceeded,
 		Metadata:      application.AuditMetadata{"mock_auth": true},
-		ViewerUserIDs: []string{user.ID},
+		ViewerUserIDs: []domain.RecordID{user.ID},
 	})
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: cookieValue, Path: "/", MaxAge: 43200, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
 	writeData(w, r, http.StatusCreated, sessionDTO{
@@ -238,7 +239,7 @@ func validateNodeRequest(body *nodeCreateRequest) error {
 	return nil
 }
 
-func ownedScope(r *http.Request) (*string, error) {
+func ownedScope(r *http.Request) (*domain.RecordID, error) {
 	scope := r.URL.Query().Get("scope")
 	if scope == "" || scope == "owned" {
 		id := activeUser(r.Context()).ID
@@ -279,13 +280,14 @@ func (a *API) createBrain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "brain.created", "brain", brain.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": brain.CanonicalID}, []string{brain.OwnerUserID})
+	a.audit(r, "brain.created", "brain", brain.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": brain.CanonicalID}, []domain.RecordID{brain.OwnerUserID})
 	writeData(w, r, http.StatusCreated, brainResponse(brain, true))
 }
 
 func (a *API) getBrain(w http.ResponseWriter, r *http.Request) {
-	brain, err := a.store.GetBrainByCanonicalID(r.Context(), r.PathValue("brainId"))
-	if err != nil {
+	brainID, parseErr := domain.ParseBrainID(r.PathValue("brainId"))
+	brain, err := a.store.GetBrainByCanonicalID(r.Context(), brainID)
+	if parseErr != nil || err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The Brain does not exist."))
 		return
 	}
@@ -298,8 +300,9 @@ func (a *API) deleteBrain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "confirm_id must exactly match the Brain ID."))
 		return
 	}
-	brain, err := a.store.GetBrainByCanonicalID(r.Context(), canonicalID)
-	if err != nil {
+	brainID, parseErr := domain.ParseBrainID(canonicalID)
+	brain, err := a.store.GetBrainByCanonicalID(r.Context(), brainID)
+	if parseErr != nil || err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The Brain does not exist."))
 		return
 	}
@@ -311,7 +314,7 @@ func (a *API) deleteBrain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "brain.deleted", "brain", brain.ID, nil, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": brain.CanonicalID}, []string{brain.OwnerUserID})
+	a.audit(r, "brain.deleted", "brain", brain.ID, nil, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": brain.CanonicalID}, []domain.RecordID{brain.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -344,13 +347,14 @@ func (a *API) createService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "service.created", "service", service.ID, nil, &service.ID, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": service.CanonicalID}, []string{service.OwnerUserID})
+	a.audit(r, "service.created", "service", service.ID, nil, &service.ID, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": service.CanonicalID}, []domain.RecordID{service.OwnerUserID})
 	writeData(w, r, http.StatusCreated, serviceResponse(service, true))
 }
 
 func (a *API) getService(w http.ResponseWriter, r *http.Request) {
-	service, err := a.store.GetServiceByCanonicalID(r.Context(), r.PathValue("serviceId"))
-	if err != nil {
+	serviceID, parseErr := domain.ParseServiceID(r.PathValue("serviceId"))
+	service, err := a.store.GetServiceByCanonicalID(r.Context(), serviceID)
+	if parseErr != nil || err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The Service does not exist."))
 		return
 	}
@@ -363,8 +367,9 @@ func (a *API) deleteService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "confirm_id must exactly match the Service ID."))
 		return
 	}
-	service, err := a.store.GetServiceByCanonicalID(r.Context(), canonicalID)
-	if err != nil {
+	serviceID, parseErr := domain.ParseServiceID(canonicalID)
+	service, err := a.store.GetServiceByCanonicalID(r.Context(), serviceID)
+	if parseErr != nil || err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The Service does not exist."))
 		return
 	}
@@ -376,7 +381,7 @@ func (a *API) deleteService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "service.deleted", "service", service.ID, nil, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": service.CanonicalID}, []string{service.OwnerUserID})
+	a.audit(r, "service.deleted", "service", service.ID, nil, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": service.CanonicalID}, []domain.RecordID{service.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 

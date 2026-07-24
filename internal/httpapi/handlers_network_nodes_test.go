@@ -108,8 +108,8 @@ func TestAddNetworkNodeHTTPIntegration(t *testing.T) {
 	}
 	user, service := users[0], services[0]
 	handler := newContractRouter(db)
-	sessionCookie := signInContractUser(t, handler, user.ID)
-	body, _ := json.Marshal(map[string]string{"node_id": service.CanonicalID})
+	sessionCookie := signInContractUser(t, handler, string(user.ID))
+	body, _ := json.Marshal(map[string]string{"node_id": string(service.CanonicalID)})
 	response := contractRequest(handler, http.MethodPost, "/api/network/nodes", body, http.Header{"Content-Type": {"application/json"}}, sessionCookie)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
@@ -123,7 +123,7 @@ func TestAddNetworkNodeHTTPIntegration(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if envelope.Data.NodeID != service.CanonicalID || !envelope.Data.OnCanvas {
+	if envelope.Data.NodeID != string(service.CanonicalID) || !envelope.Data.OnCanvas {
 		t.Fatalf("unexpected response: %#v", envelope.Data)
 	}
 
@@ -147,18 +147,18 @@ func TestAddNetworkNodeHTTPIntegration(t *testing.T) {
 	remove := func(nodeID string) *httptest.ResponseRecorder {
 		return contractRequest(handler, http.MethodDelete, "/api/network/nodes/"+nodeID, nil, nil, sessionCookie)
 	}
-	if response := remove(ownedBrain.CanonicalID); response.Code != http.StatusForbidden {
+	if response := remove(string(ownedBrain.CanonicalID)); response.Code != http.StatusForbidden {
 		t.Fatalf("owned DELETE status = %d body=%s", response.Code, response.Body.String())
 	}
-	if response := remove(nonOwnedBrain.CanonicalID); response.Code != http.StatusNoContent {
+	if response := remove(string(nonOwnedBrain.CanonicalID)); response.Code != http.StatusNoContent {
 		t.Fatalf("non-owned DELETE status = %d body=%s", response.Code, response.Body.String())
 	}
-	if onCanvas := searchResultOnCanvas(t, handler, sessionCookie, nonOwnedBrain.CanonicalID); onCanvas {
+	if onCanvas := searchResultOnCanvas(t, handler, sessionCookie, string(nonOwnedBrain.CanonicalID)); onCanvas {
 		t.Fatal("non-owned DELETE left the Brain on the canvas")
 	}
-	restoreBody, _ := json.Marshal(map[string]string{"node_id": nonOwnedBrain.CanonicalID})
+	restoreBody, _ := json.Marshal(map[string]string{"node_id": string(nonOwnedBrain.CanonicalID)})
 	restored := contractRequest(handler, http.MethodPost, "/api/network/nodes", restoreBody, http.Header{"Content-Type": {"application/json"}}, sessionCookie)
-	if restored.Code != http.StatusOK || !searchResultOnCanvas(t, handler, sessionCookie, nonOwnedBrain.CanonicalID) {
+	if restored.Code != http.StatusOK || !searchResultOnCanvas(t, handler, sessionCookie, string(nonOwnedBrain.CanonicalID)) {
 		t.Fatalf("restore status = %d body=%s", restored.Code, restored.Body.String())
 	}
 }

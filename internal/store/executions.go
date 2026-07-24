@@ -10,20 +10,20 @@ import (
 )
 
 type routeSnapshotRecord struct {
-	SourceCanonicalID   string                `json:"source_canonical_id"`
-	SourcePath          string                `json:"source_path"`
+	SourceCanonicalID   domain.BrainID        `json:"source_canonical_id"`
+	SourcePath          domain.QueryPathValue `json:"source_path"`
 	ConfigVersion       int64                 `json:"config_version"`
 	Visibility          domain.Visibility     `json:"visibility"`
 	AssetIDs            []assetSnapshotRecord `json:"asset_ids"`
 	Operation           domain.Operation      `json:"operation"`
-	ServiceHops         []string              `json:"service_hops"`
+	ServiceHops         []domain.ServiceID    `json:"service_hops"`
 	Terminal            string                `json:"terminal"`
-	ResolvedDestination string                `json:"resolved_destination"`
+	ResolvedDestination domain.BrainID        `json:"resolved_destination"`
 }
 
 type assetSnapshotRecord struct {
-	AssetID string `json:"asset_id"`
-	SHA256  string `json:"sha256"`
+	AssetID domain.RecordID `json:"asset_id"`
+	SHA256  string          `json:"sha256"`
 }
 
 type executionResultRecord struct {
@@ -147,8 +147,8 @@ func (s *Store) InsertExecution(ctx context.Context, input application.Execution
 	return execution, nil
 }
 
-func (s *Store) UpdateExecutionState(ctx context.Context, executionID string, update application.ExecutionTransitionCommand) (application.RouteExecutionSnapshot, error) {
-	result, err := encodeExecutionResult(update.Result)
+func (s *Store) TransitionExecution(ctx context.Context, executionID domain.RecordID, transition application.ExecutionTransitionCommand) (application.RouteExecutionSnapshot, error) {
+	result, err := encodeExecutionResult(transition.Result())
 	if err != nil {
 		return application.RouteExecutionSnapshot{}, fmt.Errorf("encode execution result: %w", err)
 	}
@@ -165,15 +165,15 @@ func (s *Store) UpdateExecutionState(ctx context.Context, executionID string, up
 		          source_brain_id, destination_brain_id, source_canonical_id, source_path,
 		          destination_canonical_id, operation, state, route_snapshot, result_metadata,
 		          error_code, error_message, created_at, started_at, completed_at
-	`, executionID, update.State, result, codeValue(update.ErrorCode), update.ErrorMessage,
-		update.StartedAt, update.CompletedAt))
+	`, executionID, transition.State(), result, codeValue(transition.ErrorCode()), transition.ErrorMessage(),
+		transition.StartedAt(), transition.CompletedAt()))
 	if err != nil {
 		return application.RouteExecutionSnapshot{}, fmt.Errorf("update execution state: %w", err)
 	}
 	return execution, nil
 }
 
-func (s *Store) GetExecution(ctx context.Context, executionID string) (application.RouteExecutionSnapshot, error) {
+func (s *Store) GetExecution(ctx context.Context, executionID domain.RecordID) (application.RouteExecutionSnapshot, error) {
 	execution, err := scanExecution(s.db.QueryRow(ctx, `
 		select id, mode, query_path_id, actor_user_id, initiating_brain_id,
 		       source_brain_id, destination_brain_id, source_canonical_id, source_path,
@@ -224,7 +224,7 @@ func codeValue(code *domain.Code) any {
 	return string(*code)
 }
 
-func (s *Store) ListExecutionHops(ctx context.Context, executionID string) ([]domain.ExecutionHop, error) {
+func (s *Store) ListExecutionHops(ctx context.Context, executionID domain.RecordID) ([]domain.ExecutionHop, error) {
 	rows, err := s.db.Query(ctx, `
 		select id, execution_id, hop_index, service_id, service_canonical_id,
 		       status, input_sha256, output_sha256, duration_ms, error_code, created_at

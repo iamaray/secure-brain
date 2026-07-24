@@ -41,7 +41,7 @@ func (a *API) getAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, r.PathValue("assetId"))
+	asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, recordIDAtBoundary(r.PathValue("assetId")))
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The asset does not exist."))
 		return
@@ -73,7 +73,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 	defer temp.Close()
-	var objectKey, filename, clientMediaType string
+	var objectKeyText, filename, clientMediaType string
 	var fileSeen bool
 	overwrite, _ := strconv.ParseBool(r.URL.Query().Get("overwrite"))
 	hash := sha256.New()
@@ -95,7 +95,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 				writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "The object key is invalid."))
 				return
 			}
-			objectKey = string(value)
+			objectKeyText = string(value)
 		case "file":
 			if fileSeen {
 				part.Close()
@@ -132,7 +132,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodePayloadTooLarge, "The file exceeds the upload size limit."))
 		return
 	}
-	objectKey, err = assets.NormalizeObjectKey(objectKey)
+	objectKey, err := assets.NormalizeObjectKey(objectKeyText)
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, err.Error()))
 		return
@@ -166,7 +166,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 	if classification.ParseError != "" {
 		parseError = &classification.ParseError
 	}
-	input := application.AssetWriteCommand{ID: assetID, BrainID: brain.ID, ObjectKey: objectKey, StoragePath: storagePath, OriginalFilename: filename, MediaType: classification.MediaType, ByteSize: size, SHA256: &checksum, Format: domain.AssetFormat(classification.Format), ProcessingState: domain.AssetStateUploading, ParseError: parseError}
+	input := application.AssetWriteCommand{ID: assetID, BrainID: brain.ID, ObjectKey: objectKey, StoragePath: storagePath, OriginalFilename: filename, MediaType: classification.MediaType, ByteSize: size, SHA256: &checksum, Format: classification.Format, ProcessingState: domain.AssetStateUploading, ParseError: parseError}
 	if existingErr != nil {
 		if _, err := a.store.InsertAsset(r.Context(), input); err != nil {
 			writeError(w, r, databaseError(err))
@@ -186,7 +186,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	input.ProcessingState = domain.AssetProcessingState(classification.ProcessingState)
+	input.ProcessingState = classification.ProcessingState
 	result, err := a.store.UpdateAsset(r.Context(), input)
 	if err != nil {
 		_ = a.objects.Delete(r.Context(), []string{storagePath})
@@ -202,9 +202,9 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 		eventType = "asset.overwritten"
 	}
-	a.audit(r, eventType, "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"object_key": result.ObjectKey, "byte_size": result.ByteSize, "sha256": result.SHA256}, []string{brain.OwnerUserID})
+	a.audit(r, eventType, "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"object_key": result.ObjectKey, "byte_size": result.ByteSize, "sha256": result.SHA256}, []domain.RecordID{brain.OwnerUserID})
 	if result.ProcessingState == domain.AssetStateParseFailed {
-		a.audit(r, "asset.parse_failed", "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusFailed, application.AuditMetadata{"object_key": result.ObjectKey}, []string{brain.OwnerUserID})
+		a.audit(r, "asset.parse_failed", "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusFailed, application.AuditMetadata{"object_key": result.ObjectKey}, []domain.RecordID{brain.OwnerUserID})
 	}
 	writeData(w, r, status, assetResponse(result))
 }
@@ -215,7 +215,7 @@ func (a *API) assetContent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, r.PathValue("assetId"))
+	asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, recordIDAtBoundary(r.PathValue("assetId")))
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The asset does not exist."))
 		return
@@ -239,7 +239,7 @@ func (a *API) assetContent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeStorageProviderError, "The asset could not be read."))
 		return
 	}
-	preview, err := assets.BuildPreview(string(asset.Format), string(asset.ProcessingState), data, int(a.maxPreviewBytes), min(a.maxCSVRows, 100))
+	preview, err := assets.BuildPreview(asset.Format, asset.ProcessingState, data, int(a.maxPreviewBytes), min(a.maxCSVRows, 100))
 	if err != nil {
 		if asset.ProcessingState == domain.AssetStateParseFailed {
 			preview = assets.Preview{Kind: "binary"}
@@ -259,7 +259,7 @@ func (a *API) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, r.PathValue("assetId"))
+	asset, err := a.store.GetAssetInBrain(r.Context(), brain.ID, recordIDAtBoundary(r.PathValue("assetId")))
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The asset does not exist."))
 		return
@@ -278,11 +278,11 @@ func (a *API) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.objects.Delete(r.Context(), []string{asset.StoragePath})
-	a.audit(r, "asset.deleted", "asset", asset.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"object_key": asset.ObjectKey}, []string{brain.OwnerUserID})
+	a.audit(r, "asset.deleted", "asset", asset.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"object_key": asset.ObjectKey}, []domain.RecordID{brain.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func newUUID() string {
+func newUUID() domain.RecordID {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
 		panic("crypto/rand unavailable")
@@ -290,5 +290,9 @@ func newUUID() string {
 	value[6] = (value[6] & 0x0f) | 0x40
 	value[8] = (value[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(value[:])
-	return strings.Join([]string{h[:8], h[8:12], h[12:16], h[16:20], h[20:]}, "-")
+	id, err := domain.ParseRecordID(strings.Join([]string{h[:8], h[8:12], h[12:16], h[16:20], h[20:]}, "-"))
+	if err != nil {
+		panic("generated invalid UUID")
+	}
+	return id
 }

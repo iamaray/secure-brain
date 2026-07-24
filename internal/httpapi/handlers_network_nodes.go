@@ -8,7 +8,7 @@ import (
 	"secure-brain/internal/domain"
 )
 
-var defaultOffCanvasServices = map[string]struct{}{
+var defaultOffCanvasServices = map[domain.Principal]struct{}{
 	"service.pii-scan":      {},
 	"service.policy-check":  {},
 	"service.deduplication": {},
@@ -18,18 +18,18 @@ var defaultOffCanvasServices = map[string]struct{}{
 // durable node catalog or the executable route graph.
 type networkCanvasState struct {
 	mu            sync.RWMutex
-	addedByUser   map[string]map[string]struct{}
-	removedByUser map[string]map[string]struct{}
+	addedByUser   map[domain.RecordID]map[domain.Principal]struct{}
+	removedByUser map[domain.RecordID]map[domain.Principal]struct{}
 }
 
 func newNetworkCanvasState() *networkCanvasState {
 	return &networkCanvasState{
-		addedByUser:   make(map[string]map[string]struct{}),
-		removedByUser: make(map[string]map[string]struct{}),
+		addedByUser:   make(map[domain.RecordID]map[domain.Principal]struct{}),
+		removedByUser: make(map[domain.RecordID]map[domain.Principal]struct{}),
 	}
 }
 
-func (s *networkCanvasState) onCanvas(userID, nodeType, canonicalID string) bool {
+func (s *networkCanvasState) onCanvas(userID domain.RecordID, nodeType string, canonicalID domain.Principal) bool {
 	if nodeType != "brain" && nodeType != "service" {
 		return true
 	}
@@ -47,24 +47,24 @@ func (s *networkCanvasState) onCanvas(userID, nodeType, canonicalID string) bool
 	return nodeType != "service" || !startsOffCanvas
 }
 
-func (s *networkCanvasState) add(userID, canonicalID string) {
+func (s *networkCanvasState) add(userID domain.RecordID, canonicalID domain.Principal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	added := s.addedByUser[userID]
 	if added == nil {
-		added = make(map[string]struct{})
+		added = make(map[domain.Principal]struct{})
 		s.addedByUser[userID] = added
 	}
 	added[canonicalID] = struct{}{}
 	delete(s.removedByUser[userID], canonicalID)
 }
 
-func (s *networkCanvasState) remove(userID, canonicalID string) {
+func (s *networkCanvasState) remove(userID domain.RecordID, canonicalID domain.Principal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := s.removedByUser[userID]
 	if removed == nil {
-		removed = make(map[string]struct{})
+		removed = make(map[domain.Principal]struct{})
 		s.removedByUser[userID] = removed
 	}
 	removed[canonicalID] = struct{}{}
@@ -72,33 +72,41 @@ func (s *networkCanvasState) remove(userID, canonicalID string) {
 }
 
 type canvasNode struct {
-	CanonicalID string
+	CanonicalID domain.Principal
 	DisplayName string
 	Type        string
-	OwnerUserID string
+	OwnerUserID domain.RecordID
 }
 
 func (a *API) resolveCanvasNode(r *http.Request, canonicalID string) (canvasNode, error) {
 	canonicalID = strings.TrimSpace(canonicalID)
 	switch {
 	case strings.HasPrefix(canonicalID, "brain."):
-		brain, err := a.store.GetBrainByCanonicalID(r.Context(), canonicalID)
+		id, parseErr := domain.ParseBrainID(canonicalID)
+		brain, err := a.store.GetBrainByCanonicalID(r.Context(), id)
+		if parseErr != nil {
+			return canvasNode{}, domain.NewError(domain.CodeNodeNotFound, "The requested resource does not exist.")
+		}
 		if err != nil {
 			return canvasNode{}, databaseError(err)
 		}
-		return canvasNode{CanonicalID: brain.CanonicalID, DisplayName: brain.DisplayName, Type: "brain", OwnerUserID: brain.OwnerUserID}, nil
+		return canvasNode{CanonicalID: brain.CanonicalID.Principal(), DisplayName: brain.DisplayName, Type: "brain", OwnerUserID: brain.OwnerUserID}, nil
 	case strings.HasPrefix(canonicalID, "service."):
-		service, err := a.store.GetServiceByCanonicalID(r.Context(), canonicalID)
+		id, parseErr := domain.ParseServiceID(canonicalID)
+		service, err := a.store.GetServiceByCanonicalID(r.Context(), id)
+		if parseErr != nil {
+			return canvasNode{}, domain.NewError(domain.CodeNodeNotFound, "The requested resource does not exist.")
+		}
 		if err != nil {
 			return canvasNode{}, databaseError(err)
 		}
-		return canvasNode{CanonicalID: service.CanonicalID, DisplayName: service.DisplayName, Type: "service", OwnerUserID: service.OwnerUserID}, nil
+		return canvasNode{CanonicalID: service.CanonicalID.Principal(), DisplayName: service.DisplayName, Type: "service", OwnerUserID: service.OwnerUserID}, nil
 	default:
 		return canvasNode{}, domain.NewError(domain.CodeInvalidRequest, "node_id must be a Brain or Service canonical ID.")
 	}
 }
 
-func removeCanvasNodeForUser(state *networkCanvasState, userID string, node canvasNode) error {
+func removeCanvasNodeForUser(state *networkCanvasState, userID domain.RecordID, node canvasNode) error {
 	if node.OwnerUserID == userID {
 		return domain.NewError(domain.CodeNotAuthorized, "Owned nodes cannot be removed from your canvas.")
 	}
@@ -122,7 +130,7 @@ func (a *API) addNetworkNode(w http.ResponseWriter, r *http.Request) {
 	userID := activeUser(r.Context()).ID
 	a.networkCanvas.add(userID, node.CanonicalID)
 	writeData(w, r, http.StatusOK, canvasNodeDTO{
-		NodeID: node.CanonicalID, DisplayName: node.DisplayName,
+		NodeID: string(node.CanonicalID), DisplayName: node.DisplayName,
 		Type: node.Type, OnCanvas: true,
 	})
 }

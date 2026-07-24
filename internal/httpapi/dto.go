@@ -30,10 +30,10 @@ type statusDTO struct {
 }
 
 type userDTO struct {
-	ID          string    `json:"id"`
-	Handle      string    `json:"handle"`
-	DisplayName string    `json:"display_name"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          domain.RecordID `json:"id"`
+	Handle      string          `json:"handle"`
+	DisplayName string          `json:"display_name"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
 func userResponse(user domain.User) userDTO {
@@ -58,10 +58,10 @@ type sessionDTO struct {
 }
 
 type brainDTO struct {
-	ID          string            `json:"id"`
-	OwnerUserID string            `json:"owner_user_id,omitempty"`
+	ID          domain.RecordID   `json:"id"`
+	OwnerUserID domain.RecordID   `json:"owner_user_id,omitempty"`
 	Slug        string            `json:"slug"`
-	CanonicalID string            `json:"canonical_id"`
+	CanonicalID domain.BrainID    `json:"canonical_id"`
 	DisplayName string            `json:"display_name"`
 	Status      domain.NodeStatus `json:"status"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -69,7 +69,7 @@ type brainDTO struct {
 }
 
 func brainResponse(brain domain.Brain, includeOwner bool) brainDTO {
-	owner := ""
+	var owner domain.RecordID
 	if includeOwner {
 		owner = brain.OwnerUserID
 	}
@@ -89,10 +89,10 @@ func brainListResponse(brains []domain.Brain, includeOwner bool) []brainDTO {
 }
 
 type serviceDTO struct {
-	ID             string            `json:"id"`
-	OwnerUserID    string            `json:"owner_user_id,omitempty"`
+	ID             domain.RecordID   `json:"id"`
+	OwnerUserID    domain.RecordID   `json:"owner_user_id,omitempty"`
 	Slug           string            `json:"slug"`
-	CanonicalID    string            `json:"canonical_id"`
+	CanonicalID    domain.ServiceID  `json:"canonical_id"`
 	DisplayName    string            `json:"display_name"`
 	Status         domain.NodeStatus `json:"status"`
 	CapabilityTags []string          `json:"capability_tags"`
@@ -101,7 +101,7 @@ type serviceDTO struct {
 }
 
 func serviceResponse(service domain.Service, includeOwner bool) serviceDTO {
-	owner := ""
+	var owner domain.RecordID
 	if includeOwner {
 		owner = service.OwnerUserID
 	}
@@ -122,9 +122,9 @@ func serviceListResponse(services []domain.Service, includeOwner bool) []service
 }
 
 type assetDTO struct {
-	ID               string                      `json:"id"`
-	BrainID          string                      `json:"brain_id"`
-	ObjectKey        string                      `json:"object_key"`
+	ID               domain.RecordID             `json:"id"`
+	BrainID          domain.RecordID             `json:"brain_id"`
+	ObjectKey        domain.ObjectKey            `json:"object_key"`
 	OriginalFilename string                      `json:"original_filename"`
 	MediaType        string                      `json:"media_type"`
 	ByteSize         int64                       `json:"byte_size"`
@@ -175,9 +175,9 @@ func assetPreviewResponse(preview assets.Preview) previewDTO {
 }
 
 type queryPathListItemDTO struct {
-	ID            string                `json:"id"`
-	BrainID       string                `json:"brain_id"`
-	Path          string                `json:"path"`
+	ID            domain.RecordID       `json:"id"`
+	BrainID       domain.RecordID       `json:"brain_id"`
+	Path          domain.QueryPathValue `json:"path"`
 	Visibility    domain.Visibility     `json:"visibility"`
 	State         domain.QueryPathState `json:"state"`
 	Operations    []domain.Operation    `json:"operations"`
@@ -224,17 +224,17 @@ type routeSnapshotDTO struct {
 	AssetIDs            []assetIntegritySnapshotDTO `json:"asset_ids"`
 	ConfigVersion       int64                       `json:"config_version"`
 	Operation           domain.Operation            `json:"operation"`
-	ResolvedDestination string                      `json:"resolved_destination"`
-	ServiceHops         []string                    `json:"service_hops"`
-	SourceCanonicalID   string                      `json:"source_canonical_id"`
-	SourcePath          string                      `json:"source_path"`
+	ResolvedDestination domain.BrainID              `json:"resolved_destination"`
+	ServiceHops         []domain.ServiceID          `json:"service_hops"`
+	SourceCanonicalID   domain.BrainID              `json:"source_canonical_id"`
+	SourcePath          domain.QueryPathValue       `json:"source_path"`
 	Terminal            string                      `json:"terminal"`
 	Visibility          domain.Visibility           `json:"visibility"`
 }
 
 type assetIntegritySnapshotDTO struct {
-	AssetID string `json:"asset_id"`
-	SHA256  string `json:"sha256"`
+	AssetID domain.RecordID `json:"asset_id"`
+	SHA256  string          `json:"sha256"`
 }
 
 func routeSnapshotResponse(snapshot application.RouteSnapshot) routeSnapshotDTO {
@@ -268,16 +268,16 @@ func executionResultMetadataResponse(result application.ExecutionResultSnapshot)
 }
 
 type executionDTO struct {
-	ID                     string                     `json:"id"`
+	ID                     domain.RecordID            `json:"id"`
 	Mode                   domain.ExecutionMode       `json:"mode"`
-	QueryPathID            *string                    `json:"query_path_id,omitempty"`
-	ActorUserID            *string                    `json:"actor_user_id,omitempty"`
-	InitiatingBrainID      *string                    `json:"initiating_brain_id,omitempty"`
-	SourceBrainID          *string                    `json:"source_brain_id,omitempty"`
-	DestinationBrainID     *string                    `json:"destination_brain_id,omitempty"`
-	SourceCanonicalID      string                     `json:"source_canonical_id"`
-	SourcePath             string                     `json:"source_path"`
-	DestinationCanonicalID *string                    `json:"destination_canonical_id,omitempty"`
+	QueryPathID            *domain.RecordID           `json:"query_path_id,omitempty"`
+	ActorUserID            *domain.RecordID           `json:"actor_user_id,omitempty"`
+	InitiatingBrainID      *domain.RecordID           `json:"initiating_brain_id,omitempty"`
+	SourceBrainID          *domain.RecordID           `json:"source_brain_id,omitempty"`
+	DestinationBrainID     *domain.RecordID           `json:"destination_brain_id,omitempty"`
+	SourceCanonicalID      domain.BrainID             `json:"source_canonical_id"`
+	SourcePath             domain.QueryPathValue      `json:"source_path"`
+	DestinationCanonicalID *domain.BrainID            `json:"destination_canonical_id,omitempty"`
 	Operation              domain.Operation           `json:"operation"`
 	State                  domain.ExecutionState      `json:"state"`
 	RouteSnapshot          routeSnapshotDTO           `json:"route_snapshot"`
@@ -306,11 +306,11 @@ func executionResponse(snapshot application.RouteExecutionSnapshot) executionDTO
 }
 
 type executionHopDTO struct {
-	ID                 string           `json:"id"`
-	ExecutionID        string           `json:"execution_id"`
+	ID                 domain.RecordID  `json:"id"`
+	ExecutionID        domain.RecordID  `json:"execution_id"`
 	HopIndex           int              `json:"hop_index"`
-	ServiceID          *string          `json:"service_id,omitempty"`
-	ServiceCanonicalID string           `json:"service_canonical_id"`
+	ServiceID          *domain.RecordID `json:"service_id,omitempty"`
+	ServiceCanonicalID domain.ServiceID `json:"service_canonical_id"`
 	Status             domain.HopStatus `json:"status"`
 	InputSHA256        string           `json:"input_sha256"`
 	OutputSHA256       string           `json:"output_sha256"`
@@ -339,19 +339,19 @@ type executionTraceDTO struct {
 }
 
 type transferDTO struct {
-	ID                     string                `json:"id"`
-	ExecutionID            string                `json:"execution_id"`
-	SourceBrainID          *string               `json:"source_brain_id,omitempty"`
-	DestinationBrainID     *string               `json:"destination_brain_id,omitempty"`
-	SourceCanonicalID      string                `json:"source_canonical_id"`
-	DestinationCanonicalID string                `json:"destination_canonical_id"`
+	ID                     domain.RecordID       `json:"id"`
+	ExecutionID            domain.RecordID       `json:"execution_id"`
+	SourceBrainID          *domain.RecordID      `json:"source_brain_id,omitempty"`
+	DestinationBrainID     *domain.RecordID      `json:"destination_brain_id,omitempty"`
+	SourceCanonicalID      domain.BrainID        `json:"source_canonical_id"`
+	DestinationCanonicalID domain.BrainID        `json:"destination_canonical_id"`
 	Status                 domain.TransferStatus `json:"status"`
-	SuggestedObjectKey     string                `json:"suggested_object_key"`
+	SuggestedObjectKey     domain.ObjectKey      `json:"suggested_object_key"`
 	SuggestedFilename      string                `json:"suggested_filename"`
 	MediaType              string                `json:"media_type"`
 	ByteSize               int64                 `json:"byte_size"`
 	SHA256                 string                `json:"sha256"`
-	AcceptedAssetID        *string               `json:"accepted_asset_id,omitempty"`
+	AcceptedAssetID        *domain.RecordID      `json:"accepted_asset_id,omitempty"`
 	CreatedAt              time.Time             `json:"created_at"`
 	ExpiresAt              time.Time             `json:"expires_at"`
 	ResolvedAt             *time.Time            `json:"resolved_at,omitempty"`
@@ -393,7 +393,7 @@ type transferDetailDTO struct {
 type transferResolutionDTO struct {
 	Asset      *assetDTO             `json:"asset,omitempty"`
 	Status     domain.TransferStatus `json:"status"`
-	TransferID string                `json:"transfer_id"`
+	TransferID domain.RecordID       `json:"transfer_id"`
 }
 
 func transferResolutionResponse(result application.TransferResolutionResult) transferResolutionDTO {
@@ -407,13 +407,13 @@ func transferResolutionResponse(result application.TransferResolutionResult) tra
 
 type routeExecutionResultDTO struct {
 	DataBase64  *string                     `json:"data_base64,omitempty"`
-	Destination string                      `json:"destination"`
-	ExecutionID string                      `json:"execution_id"`
+	Destination domain.BrainID              `json:"destination"`
+	ExecutionID domain.RecordID             `json:"execution_id"`
 	Outcome     string                      `json:"outcome"`
 	Result      *executionResultMetadataDTO `json:"result,omitempty"`
-	RouteID     string                      `json:"route_id"`
-	Source      string                      `json:"source"`
-	SourcePath  string                      `json:"source_path"`
+	RouteID     domain.RecordID             `json:"route_id"`
+	Source      domain.BrainID              `json:"source"`
+	SourcePath  domain.QueryPathValue       `json:"source_path"`
 	Text        *string                     `json:"text,omitempty"`
 	Transfer    *transferDTO                `json:"transfer,omitempty"`
 }
@@ -436,14 +436,14 @@ func routeExecutionResultResponse(result application.RouteExecutionResult) route
 }
 
 type auditEventDTO struct {
-	ID           string                    `json:"id"`
+	ID           domain.RecordID           `json:"id"`
 	EventType    string                    `json:"event_type"`
-	ActorUserID  *string                   `json:"actor_user_id,omitempty"`
+	ActorUserID  *domain.RecordID          `json:"actor_user_id,omitempty"`
 	ResourceType string                    `json:"resource_type"`
-	ResourceID   *string                   `json:"resource_id,omitempty"`
-	BrainID      *string                   `json:"brain_id,omitempty"`
-	ServiceID    *string                   `json:"service_id,omitempty"`
-	ExecutionID  *string                   `json:"execution_id,omitempty"`
+	ResourceID   *domain.RecordID          `json:"resource_id,omitempty"`
+	BrainID      *domain.RecordID          `json:"brain_id,omitempty"`
+	ServiceID    *domain.RecordID          `json:"service_id,omitempty"`
+	ExecutionID  *domain.RecordID          `json:"execution_id,omitempty"`
 	Status       domain.AuditStatus        `json:"status"`
 	Metadata     application.AuditMetadata `json:"metadata"`
 	CreatedAt    time.Time                 `json:"created_at"`
@@ -464,9 +464,9 @@ func auditEventListResponse(events []domain.AuditEvent) []auditEventDTO {
 }
 
 type chatMessageDTO struct {
-	ID        string          `json:"id"`
-	BrainID   string          `json:"brain_id"`
-	UserID    string          `json:"user_id"`
+	ID        domain.RecordID `json:"id"`
+	BrainID   domain.RecordID `json:"brain_id"`
+	UserID    domain.RecordID `json:"user_id"`
 	Role      domain.ChatRole `json:"role"`
 	Content   string          `json:"content"`
 	Model     *string         `json:"model,omitempty"`
