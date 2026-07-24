@@ -45,10 +45,14 @@ Open `http://localhost:3000`. The Astro development server proxies API and query
 Unit tests need no network or external services:
 
 ```sh
-go test ./...
-go vet ./...
+./scripts/check.sh
 go test -race ./...
 ```
+
+The checked-in quality script runs unit tests, `go vet`, and the production
+dependency check. Run `./scripts/codebase-metrics.sh` at coherent refactor
+boundaries to report production/test line counts, import edges, untyped maps,
+discarded results, direct HTTP adapter imports, and oversized functions.
 
 Store integration tests use `DATABASE_TEST_URL` when supplied and otherwise skip with a clear message. Use a disposable database initialized with `db/schema.sql`.
 

@@ -1,0 +1,6 @@
+# rule	from_package	imported_package	owning_task	removal_condition
+transport_concrete_adapter	secure-brain/internal/httpapi	secure-brain/internal/openai	Task 3.b	Remove when ChatService consumes the application-owned ChatProvider port.
+transport_concrete_adapter	secure-brain/internal/httpapi	secure-brain/internal/storage	Task 3.b	Remove when asset and transfer services consume the AssetBlobStore port.
+transport_concrete_adapter	secure-brain/internal/httpapi	secure-brain/internal/store	Task 3.b	Remove when every handler invokes its named application service or coordinator.
+transport_infrastructure_protocol	secure-brain/internal/httpapi	github.com/jackc/pgx/v5	Task 3.c	Remove when the application error taxonomy replaces transport-side database matching.
+transport_infrastructure_protocol	secure-brain/internal/httpapi	github.com/jackc/pgx/v5/pgconn	Task 3.c	Remove when the application error taxonomy replaces transport-side PostgreSQL inspection.
