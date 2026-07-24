@@ -1,7 +1,0 @@
-# This immutable Task 1.d ceiling prevents the active exception manifest from broadening.
-# rule	from_package	imported_package	owning_task	removal_condition
-transport_concrete_adapter	secure-brain/internal/httpapi	secure-brain/internal/openai	Task 3.b	Baseline violation; remove after the ChatProvider application port is wired.
-transport_concrete_adapter	secure-brain/internal/httpapi	secure-brain/internal/storage	Task 3.b	Baseline violation; remove after the AssetBlobStore application port is wired.
-transport_concrete_adapter	secure-brain/internal/httpapi	secure-brain/internal/store	Task 3.b	Baseline violation; remove after handlers depend only on named application use cases.
-transport_infrastructure_protocol	secure-brain/internal/httpapi	github.com/jackc/pgx/v5	Task 3.c	Baseline violation; remove after database errors are translated before transport.
-transport_infrastructure_protocol	secure-brain/internal/httpapi	github.com/jackc/pgx/v5/pgconn	Task 3.c	Baseline violation; remove after PostgreSQL errors are translated before transport.
