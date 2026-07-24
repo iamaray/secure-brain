@@ -1,1 +1,7 @@
 .env
+AGENTS.md
+.agents
+.codex
+.claude
+misc/
+CLAUDE.md

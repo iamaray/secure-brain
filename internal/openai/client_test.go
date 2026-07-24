@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"secure-brain/internal/domain"
@@ -101,5 +102,124 @@ func TestRespondClassifiesMalformedMissingAndProviderErrors(t *testing.T) {
 				t.Fatalf("provider error leaked content: %v", err)
 			}
 		})
+	}
+}
+
+func TestRespondBoundsAndStrictlyDecodesProviderResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+	}{
+		{
+			name: "trailing JSON",
+			body: func() string {
+				return `{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]} {}`
+			},
+		},
+		{
+			name: "oversized",
+			body: func() string {
+				return strings.Repeat("x", maxProviderResponseBytes+1)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, tt.body())
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, "openai-test-key", server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Respond(context.Background(), Request{Model: "gpt-test", MaxOutputTokens: 1})
+			var appErr *domain.Error
+			if !errors.As(err, &appErr) || appErr.Code != domain.CodeChatProviderError {
+				t.Fatalf("error = %#v", err)
+			}
+		})
+	}
+}
+
+func TestRespondRetriesOneAmbiguousLocalTransportFailure(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("test server does not support connection hijacking")
+			}
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatalf("hijack connection: %v", err)
+			}
+			_ = connection.Close()
+			return
+		}
+		_, _ = io.WriteString(w, `{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"retried"}]}]}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "openai-test-key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := client.Respond(context.Background(), Request{Model: "gpt-test", MaxOutputTokens: 1})
+	if err != nil || text != "retried" || attempts.Load() != 2 {
+		t.Fatalf("response = %q, attempts = %d, error = %v", text, attempts.Load(), err)
+	}
+}
+
+func TestRespondDoesNotRetryHTTPFailure(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "controlled failure", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "openai-test-key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Respond(context.Background(), Request{Model: "gpt-test", MaxOutputTokens: 1})
+	if err == nil || attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, error = %v", attempts.Load(), err)
+	}
+}
+
+func TestNewClientAndRequestValidationDoNotContactProvider(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		baseURL string
+		key     string
+	}{
+		{name: "relative URL", baseURL: "/responses", key: "key"},
+		{name: "unsupported scheme", baseURL: "file:///tmp/provider", key: "key"},
+		{name: "missing key", baseURL: "http://127.0.0.1", key: " "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewClient(test.baseURL, test.key, nil); err == nil {
+				t.Fatal("NewClient unexpectedly succeeded")
+			}
+		})
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("invalid request contacted provider")
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []Request{
+		{Model: "", MaxOutputTokens: 1},
+		{Model: "gpt-test", MaxOutputTokens: 0},
+	} {
+		_, err := client.Respond(context.Background(), request)
+		var appErr *domain.Error
+		if !errors.As(err, &appErr) || appErr.Code != domain.CodeInvalidRequest {
+			t.Fatalf("error = %#v", err)
+		}
 	}
 }

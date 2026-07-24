@@ -56,6 +56,7 @@ discarded results, direct HTTP adapter imports, and oversized functions.
 
 Store integration tests use `DATABASE_TEST_URL` when supplied and otherwise skip with a clear message. Use a disposable database initialized with `db/schema.sql`.
 
+
 ## Minimal API walkthrough
 
 The API returns `{"data":...,"request_id":"req_..."}` on success and stable error envelopes on failure. Preserve the cookie jar between calls.
