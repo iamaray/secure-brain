@@ -132,7 +132,7 @@ func rawRead(assets []Asset) (domain.Payload, error) {
 			Bytes:             a.Bytes,
 			MediaType:         mediaTypeOrDefault(a.Asset.MediaType),
 			SuggestedFilename: a.Asset.OriginalFilename,
-			Metadata: map[string]any{
+			Metadata: domain.PayloadMetadata{
 				"operation":   OperationRawRead,
 				"asset_count": 1,
 				"asset_ids":   []string{a.Asset.ID},
@@ -161,7 +161,7 @@ func rawRead(assets []Asset) (domain.Payload, error) {
 	}
 	return domain.Payload{
 		Bytes: b, MediaType: "application/json", SuggestedFilename: "raw-read.json",
-		Metadata: map[string]any{"operation": OperationRawRead, "asset_count": len(assets), "asset_ids": ids, "structured": true},
+		Metadata: domain.PayloadMetadata{"operation": OperationRawRead, "asset_count": len(assets), "asset_ids": ids, "structured": true},
 	}, nil
 }
 
@@ -230,7 +230,7 @@ func textSearch(assets []Asset, needle string, limits Limits) (domain.Payload, e
 	}
 	return domain.Payload{
 		Bytes: b, MediaType: "application/json", SuggestedFilename: "text-search.json",
-		Metadata: map[string]any{"operation": OperationTextSearch, "match_count": result.MatchCount, "truncated": result.Truncated, "structured": true},
+		Metadata: domain.PayloadMetadata{"operation": OperationTextSearch, "match_count": result.MatchCount, "truncated": result.Truncated, "structured": true},
 	}, nil
 }
 
@@ -324,7 +324,7 @@ func csvQuery(assets []Asset, req Request, limits Limits) (domain.Payload, error
 	}
 	return domain.Payload{
 		Bytes: b, MediaType: "application/json", SuggestedFilename: "csv-query.json",
-		Metadata: map[string]any{"operation": OperationCSVQuery, "file_count": len(result.Files), "returned_row_count": returned, "structured": true},
+		Metadata: domain.PayloadMetadata{"operation": OperationCSVQuery, "file_count": len(result.Files), "returned_row_count": returned, "structured": true},
 	}, nil
 }
 

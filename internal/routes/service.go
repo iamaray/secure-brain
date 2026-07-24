@@ -109,9 +109,9 @@ func checksum(value []byte) string {
 
 func envelopeChecksum(payload domain.Payload) (string, error) {
 	value, err := json.Marshal(struct {
-		MediaType         string         `json:"media_type"`
-		SuggestedFilename string         `json:"suggested_filename"`
-		Metadata          map[string]any `json:"metadata"`
+		MediaType         string                 `json:"media_type"`
+		SuggestedFilename string                 `json:"suggested_filename"`
+		Metadata          domain.PayloadMetadata `json:"metadata"`
 	}{payload.MediaType, payload.SuggestedFilename, payload.Metadata})
 	if err != nil {
 		return "", err

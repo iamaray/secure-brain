@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -30,7 +31,7 @@ const transferColumns = `
 	suggested_filename, media_type, byte_size, sha256, accepted_asset_id,
 	created_at, expires_at, resolved_at`
 
-func (s *Store) InsertTransfer(ctx context.Context, input TransferInput) (domain.Transfer, error) {
+func (s *Store) InsertTransfer(ctx context.Context, input application.TransferCreateCommand) (domain.Transfer, error) {
 	transfer, err := scanTransfer(s.db.QueryRow(ctx, `
 		insert into public.transfers (
 			id, execution_id, source_brain_id, destination_brain_id,
@@ -59,7 +60,7 @@ func (s *Store) GetTransfer(ctx context.Context, transferID string) (domain.Tran
 	return transfer, nil
 }
 
-func (s *Store) ListTransfers(ctx context.Context, filter TransferFilter) ([]domain.Transfer, error) {
+func (s *Store) ListTransfers(ctx context.Context, filter application.TransferQuery) ([]domain.Transfer, error) {
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -174,7 +175,7 @@ func (s *Store) ExpirePendingTransfers(ctx context.Context, now time.Time) ([]do
 	return transfers, nil
 }
 
-func (s *Store) GetIdempotencyRecord(ctx context.Context, userID, scope, key string) (IdempotencyRecord, error) {
+func (s *Store) GetIdempotencyRecord(ctx context.Context, userID, scope, key string) (application.IdempotencySnapshot, error) {
 	record, err := scanIdempotency(s.db.QueryRow(ctx, `
 		select id, user_id, scope, idempotency_key, request_hash,
 		       response_status, response_body, created_at, expires_at
@@ -183,20 +184,20 @@ func (s *Store) GetIdempotencyRecord(ctx context.Context, userID, scope, key str
 		  and expires_at > now()
 	`, userID, scope, key))
 	if err != nil {
-		return IdempotencyRecord{}, fmt.Errorf("get idempotency record: %w", err)
+		return application.IdempotencySnapshot{}, fmt.Errorf("get idempotency record: %w", err)
 	}
 	return record, nil
 }
 
-func scanIdempotency(row interface{ Scan(...any) error }) (IdempotencyRecord, error) {
-	var record IdempotencyRecord
+func scanIdempotency(row interface{ Scan(...any) error }) (application.IdempotencySnapshot, error) {
+	var record application.IdempotencySnapshot
 	err := row.Scan(&record.ID, &record.UserID, &record.Scope, &record.IdempotencyKey,
 		&record.RequestHash, &record.ResponseStatus, &record.ResponseBody,
 		&record.CreatedAt, &record.ExpiresAt)
 	return record, err
 }
 
-func (s *Store) CreateIdempotencyRecord(ctx context.Context, userID, scope, key, requestHash string, expiresAt time.Time) (IdempotencyRecord, error) {
+func (s *Store) CreateIdempotencyRecord(ctx context.Context, userID, scope, key, requestHash string, expiresAt time.Time) (application.IdempotencySnapshot, error) {
 	record, err := scanIdempotency(s.db.QueryRow(ctx, `
 		insert into public.idempotency_records (
 			user_id, scope, idempotency_key, request_hash, expires_at
@@ -212,15 +213,15 @@ func (s *Store) CreateIdempotencyRecord(ctx context.Context, userID, scope, key,
 		          response_status, response_body, created_at, expires_at
 	`, userID, scope, key, requestHash, expiresAt.UTC()))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return IdempotencyRecord{}, ErrIdempotencyExists
+		return application.IdempotencySnapshot{}, ErrIdempotencyExists
 	}
 	if err != nil {
-		return IdempotencyRecord{}, fmt.Errorf("create idempotency record: %w", err)
+		return application.IdempotencySnapshot{}, fmt.Errorf("create idempotency record: %w", err)
 	}
 	return record, nil
 }
 
-func (s *Store) CompleteIdempotencyRecord(ctx context.Context, id string, responseStatus int, responseBody []byte) (IdempotencyRecord, error) {
+func (s *Store) CompleteIdempotencyRecord(ctx context.Context, id string, responseStatus int, responseBody []byte) (application.IdempotencySnapshot, error) {
 	record, err := scanIdempotency(s.db.QueryRow(ctx, `
 		update public.idempotency_records
 		set response_status = $2, response_body = $3
@@ -229,7 +230,7 @@ func (s *Store) CompleteIdempotencyRecord(ctx context.Context, id string, respon
 		          response_status, response_body, created_at, expires_at
 	`, id, responseStatus, responseBody))
 	if err != nil {
-		return IdempotencyRecord{}, fmt.Errorf("complete idempotency record: %w", err)
+		return application.IdempotencySnapshot{}, fmt.Errorf("complete idempotency record: %w", err)
 	}
 	return record, nil
 }

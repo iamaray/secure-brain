@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 	openaiapi "secure-brain/internal/openai"
 	"secure-brain/internal/query"
@@ -365,7 +366,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		}
 		requireCallSequence(t, fixture.objects.takeCalls(), "put")
 
-		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, store.AuditFilter{Limit: 50})
+		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, application.AuditQuery{Limit: 50})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -387,7 +388,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 			Visibility:        domain.VisibilityPrivate,
 			AllowedBrainIDs:   []string{fixture.destination.CanonicalID},
 			AllowedServiceIDs: []string{fixture.service.CanonicalID},
-			Route: &routes.RouteConfig{
+			Route: &routeDTO{
 				ServiceHops: []string{fixture.service.CanonicalID, fixture.service.CanonicalID},
 				Terminal:    fixture.destination.CanonicalID,
 			},
@@ -402,8 +403,8 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.QueryPath.State != domain.QueryPathStateDraft || len(config.Hops) != 2 ||
-			config.Hops[0].ServiceID != fixture.service.ID || config.Hops[1].ServiceID != fixture.service.ID {
+		if config.QueryPath.State != domain.QueryPathStateDraft || len(config.Route.Hops) != 2 ||
+			config.Route.Hops[0].ServiceID != fixture.service.ID || config.Route.Hops[1].ServiceID != fixture.service.ID {
 			t.Fatalf("saved configuration drifted: %#v", config)
 		}
 
@@ -439,11 +440,11 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.QueryPath.State != domain.QueryPathStateEnabled || config.QueryPath.ConfigVersion != 4 || len(config.Hops) != 2 {
+		if config.QueryPath.State != domain.QueryPathStateEnabled || config.QueryPath.ConfigVersion != 4 || len(config.Route.Hops) != 2 {
 			t.Fatalf("unexpected final configuration: %#v", config)
 		}
 
-		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, store.AuditFilter{Limit: 50})
+		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, application.AuditQuery{Limit: 50})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -462,7 +463,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 	t.Run("pull execution preserves repeated trace", func(t *testing.T) {
 		request := workflowRequest(http.MethodPost, "/q/x/y", fixture.user, invocationRequest{
 			InitiatingBrainID: fixture.source.CanonicalID,
-			Query:             query.Request{Operation: query.OperationRawRead},
+			Query:             queryDTO{Operation: query.OperationRawRead},
 		}, map[string]string{
 			"sourceBrainId": fixture.source.CanonicalID,
 			"queryPath":     strings.TrimPrefix(path, "/"),
@@ -719,7 +720,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 			t.Fatal("canvas add did not restore the Brain")
 		}
 
-		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, store.AuditFilter{Limit: 200})
+		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, application.AuditQuery{Limit: 200})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -740,7 +741,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		if len(visibleAccepted) != 1 || visibleAccepted[0].EventType != "transfer.accepted" {
 			t.Fatalf("unexpected viewer-scoped audit response: %#v", visibleAccepted)
 		}
-		outsiderEvents, err := fixture.db.ListAuditEvents(ctx, outsider.ID, store.AuditFilter{Limit: 200})
+		outsiderEvents, err := fixture.db.ListAuditEvents(ctx, outsider.ID, application.AuditQuery{Limit: 200})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -794,7 +795,7 @@ func TestCoreWorkflowCharacterizationIntegration(t *testing.T) {
 		if err != nil || len(afterFailure) != 4 {
 			t.Fatalf("provider failure changed chat persistence: %#v err=%v", afterFailure, err)
 		}
-		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, store.AuditFilter{EventType: "chat.failed", Limit: 10})
+		events, err := fixture.db.ListAuditEvents(ctx, fixture.user.ID, application.AuditQuery{EventType: "chat.failed", Limit: 10})
 		if err != nil || len(events) != 1 || events[0].Status != domain.AuditStatusFailed {
 			t.Fatalf("chat failure audit = %#v err=%v", events, err)
 		}

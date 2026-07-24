@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -45,8 +46,8 @@ func (s *Store) GetUser(ctx context.Context, id string) (domain.User, error) {
 	return user, nil
 }
 
-func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID string, expiresAt time.Time) (Session, error) {
-	var session Session
+func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID string, expiresAt time.Time) (application.SessionSnapshot, error) {
+	var session application.SessionSnapshot
 	err := s.db.QueryRow(ctx, `
 		insert into public.mock_sessions (token_hash, user_id, expires_at)
 		values ($1, $2, $3)
@@ -56,13 +57,13 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID stri
 		&session.LastSeenAt, &session.ExpiresAt,
 	)
 	if err != nil {
-		return Session{}, fmt.Errorf("create session: %w", err)
+		return application.SessionSnapshot{}, fmt.Errorf("create session: %w", err)
 	}
 	return session, nil
 }
 
-func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, error) {
-	var session Session
+func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (application.SessionSnapshot, error) {
+	var session application.SessionSnapshot
 	err := s.db.QueryRow(ctx, `
 		select ms.id, ms.token_hash, ms.user_id, ms.created_at, ms.last_seen_at, ms.expires_at,
 		       u.id, u.handle, u.display_name, u.created_at
@@ -76,7 +77,7 @@ func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (Se
 		&session.User.Handle, &session.User.DisplayName, &session.User.CreatedAt,
 	)
 	if err != nil {
-		return Session{}, fmt.Errorf("get session: %w", err)
+		return application.SessionSnapshot{}, fmt.Errorf("get session: %w", err)
 	}
 	return session, nil
 }

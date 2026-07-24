@@ -36,11 +36,15 @@ const (
 // Error is the single application error shape. Cause and sensitive internals are
 // intentionally excluded from JSON responses.
 type Error struct {
-	Code    Code           `json:"code"`
-	Message string         `json:"message"`
-	Cause   error          `json:"-"`
-	Details map[string]any `json:"details,omitempty"`
+	Code    Code         `json:"code"`
+	Message string       `json:"message"`
+	Cause   error        `json:"-"`
+	Details ErrorDetails `json:"details,omitempty"`
 }
+
+// ErrorDetails contains bounded, non-sensitive structured context whose allowed
+// keys are owned by an error code. ROUTE_INVALID currently allows "fields".
+type ErrorDetails map[string]any
 
 func (e *Error) Error() string {
 	if e == nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -25,10 +26,10 @@ func scanAuditEvent(row interface{ Scan(...any) error }) (domain.AuditEvent, err
 
 // InsertAuditEvent inserts the event and its materialized viewers. Call it on a
 // transaction-bound Store when it accompanies a business mutation.
-func (s *Store) InsertAuditEvent(ctx context.Context, input AuditEventInput) (domain.AuditEvent, error) {
-	metadata := input.Metadata
-	if len(metadata) == 0 {
-		metadata = json.RawMessage(`{}`)
+func (s *Store) InsertAuditEvent(ctx context.Context, input application.AuditRecordCommand) (domain.AuditEvent, error) {
+	metadata, err := json.Marshal(input.Metadata)
+	if err != nil {
+		return domain.AuditEvent{}, fmt.Errorf("encode audit metadata: %w", err)
 	}
 	event, err := scanAuditEvent(s.db.QueryRow(ctx, `
 		insert into public.audit_events (
@@ -57,7 +58,7 @@ func (s *Store) InsertAuditEvent(ctx context.Context, input AuditEventInput) (do
 	return event, nil
 }
 
-func (s *Store) ListAuditEvents(ctx context.Context, viewerUserID string, filter AuditFilter) ([]domain.AuditEvent, error) {
+func (s *Store) ListAuditEvents(ctx context.Context, viewerUserID string, filter application.AuditQuery) ([]domain.AuditEvent, error) {
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -174,7 +175,7 @@ func (s *Store) ClearChat(ctx context.Context, brainID, userID string) (int64, e
 
 // ListNetworkRoutes returns persistence facts for all enabled routes. Visibility
 // and ownership projection remain application policy.
-func (s *Store) ListNetworkRoutes(ctx context.Context) ([]NetworkRoute, error) {
+func (s *Store) ListNetworkRoutes(ctx context.Context) ([]application.NetworkRouteSnapshot, error) {
 	rows, err := s.db.Query(ctx, `
 		select r.id, qp.id, b.id, b.canonical_id, b.display_name, b.owner_user_id,
 		       qp.path, qp.operations, qp.visibility, qp.state, r.terminal_mode,
@@ -189,9 +190,9 @@ func (s *Store) ListNetworkRoutes(ctx context.Context) ([]NetworkRoute, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list network routes: %w", err)
 	}
-	routes := make([]NetworkRoute, 0)
+	routes := make([]application.NetworkRouteSnapshot, 0)
 	for rows.Next() {
-		var route NetworkRoute
+		var route application.NetworkRouteSnapshot
 		var operations []string
 		if err := rows.Scan(&route.RouteID, &route.QueryPathID, &route.SourceBrainID,
 			&route.SourceCanonicalID, &route.SourceDisplayName, &route.SourceOwnerUserID,
@@ -248,7 +249,7 @@ func (s *Store) ListNetworkRoutes(ctx context.Context) ([]NetworkRoute, error) {
 			return nil, fmt.Errorf("list network route hops: %w", err)
 		}
 		for hopRows.Next() {
-			var hop NetworkHop
+			var hop application.NetworkHopSnapshot
 			if err := hopRows.Scan(&hop.HopIndex, &hop.ServiceID, &hop.CanonicalID,
 				&hop.DisplayName, &hop.OwnerUserID); err != nil {
 				hopRows.Close()
@@ -265,7 +266,7 @@ func (s *Store) ListNetworkRoutes(ctx context.Context) ([]NetworkRoute, error) {
 	return routes, nil
 }
 
-func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]NetworkNode, error) {
+func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]application.NetworkNodeSnapshot, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -284,9 +285,9 @@ func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]Net
 		return nil, fmt.Errorf("search nodes: %w", err)
 	}
 	defer rows.Close()
-	nodes := make([]NetworkNode, 0)
+	nodes := make([]application.NetworkNodeSnapshot, 0)
 	for rows.Next() {
-		var node NetworkNode
+		var node application.NetworkNodeSnapshot
 		if err := rows.Scan(&node.ID, &node.Type, &node.DisplayName, &node.OwnerUserID, &node.Status); err != nil {
 			return nil, fmt.Errorf("search nodes scan: %w", err)
 		}

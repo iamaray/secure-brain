@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -39,8 +40,8 @@ func operationStrings(values []domain.Operation) []string {
 
 // CreateQueryPath persists the full scope, grants, optional route and ordered
 // repeated hops in one transaction.
-func (s *Store) CreateQueryPath(ctx context.Context, input QueryPathConfigInput) (QueryPathConfig, error) {
-	var result QueryPathConfig
+func (s *Store) CreateQueryPath(ctx context.Context, input application.QueryPathCommand) (application.QueryPathSnapshot, error) {
+	var result application.QueryPathSnapshot
 	err := s.withinTx(ctx, func(tx *Store) error {
 		path, err := scanQueryPath(tx.db.QueryRow(ctx, `
 			insert into public.query_paths (brain_id, path, visibility, state, operations)
@@ -62,8 +63,8 @@ func (s *Store) CreateQueryPath(ctx context.Context, input QueryPathConfigInput)
 
 // ReplaceQueryPath replaces the complete persisted configuration and increments
 // config_version only if expectedVersion matches.
-func (s *Store) ReplaceQueryPath(ctx context.Context, id string, expectedVersion int64, input QueryPathConfigInput) (QueryPathConfig, error) {
-	var result QueryPathConfig
+func (s *Store) ReplaceQueryPath(ctx context.Context, id string, expectedVersion int64, input application.QueryPathCommand) (application.QueryPathSnapshot, error) {
+	var result application.QueryPathSnapshot
 	err := s.withinTx(ctx, func(tx *Store) error {
 		_, err := scanQueryPath(tx.db.QueryRow(ctx, `
 			update public.query_paths
@@ -101,7 +102,7 @@ func (s *Store) ReplaceQueryPath(ctx context.Context, id string, expectedVersion
 	return result, err
 }
 
-func (s *Store) insertQueryPathRelations(ctx context.Context, queryPathID string, input QueryPathConfigInput) error {
+func (s *Store) insertQueryPathRelations(ctx context.Context, queryPathID string, input application.QueryPathCommand) error {
 	for position, assetID := range input.AssetIDs {
 		if _, err := s.db.Exec(ctx, `
 			insert into public.query_path_assets (query_path_id, asset_id, position)
@@ -148,16 +149,23 @@ func (s *Store) insertQueryPathRelations(ctx context.Context, queryPathID string
 	return nil
 }
 
-func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (QueryPathConfig, error) {
+func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (application.QueryPathSnapshot, error) {
 	path, err := scanQueryPath(s.db.QueryRow(ctx, `
 		select id, brain_id, path, visibility, state, operations,
 		       config_version, created_at, updated_at
 		from public.query_paths where id = $1
 	`, queryPathID))
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path: %w", err)
 	}
-	config := QueryPathConfig{QueryPath: path, Assets: []domain.Asset{}, AllowedBrains: []domain.Brain{}, AllowedServices: []domain.Service{}, Hops: []domain.RouteHop{}}
+	config := application.QueryPathSnapshot{
+		QueryPath: path,
+		Assets:    []domain.Asset{},
+		Policy: application.PolicySnapshot{
+			AllowedBrains:   []domain.Brain{},
+			AllowedServices: []domain.Service{},
+		},
+	}
 
 	assetRows, err := s.db.Query(ctx, `
 		select a.id, a.brain_id, a.object_key, a.storage_path, a.original_filename, a.media_type,
@@ -168,20 +176,20 @@ func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (Qu
 		order by qpa.position
 	`, queryPathID)
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path assets: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path assets: %w", err)
 	}
 	for assetRows.Next() {
 		asset, scanErr := scanAsset(assetRows)
 		if scanErr != nil {
 			assetRows.Close()
-			return QueryPathConfig{}, fmt.Errorf("load query path asset scan: %w", scanErr)
+			return application.QueryPathSnapshot{}, fmt.Errorf("load query path asset scan: %w", scanErr)
 		}
 		config.Assets = append(config.Assets, asset)
 	}
 	err = assetRows.Err()
 	assetRows.Close()
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path asset rows: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path asset rows: %w", err)
 	}
 
 	brainRows, err := s.db.Query(ctx, `
@@ -192,20 +200,20 @@ func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (Qu
 		order by b.canonical_id
 	`, queryPathID)
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path brain grants: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path brain grants: %w", err)
 	}
 	for brainRows.Next() {
 		brain, scanErr := scanBrain(brainRows)
 		if scanErr != nil {
 			brainRows.Close()
-			return QueryPathConfig{}, fmt.Errorf("load query path brain grant scan: %w", scanErr)
+			return application.QueryPathSnapshot{}, fmt.Errorf("load query path brain grant scan: %w", scanErr)
 		}
-		config.AllowedBrains = append(config.AllowedBrains, brain)
+		config.Policy.AllowedBrains = append(config.Policy.AllowedBrains, brain)
 	}
 	err = brainRows.Err()
 	brainRows.Close()
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path brain grant rows: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path brain grant rows: %w", err)
 	}
 
 	serviceRows, err := s.db.Query(ctx, `
@@ -217,20 +225,20 @@ func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (Qu
 		order by sv.canonical_id
 	`, queryPathID)
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path service grants: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path service grants: %w", err)
 	}
 	for serviceRows.Next() {
 		service, scanErr := scanService(serviceRows)
 		if scanErr != nil {
 			serviceRows.Close()
-			return QueryPathConfig{}, fmt.Errorf("load query path service grant scan: %w", scanErr)
+			return application.QueryPathSnapshot{}, fmt.Errorf("load query path service grant scan: %w", scanErr)
 		}
-		config.AllowedServices = append(config.AllowedServices, service)
+		config.Policy.AllowedServices = append(config.Policy.AllowedServices, service)
 	}
 	err = serviceRows.Err()
 	serviceRows.Close()
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path service grant rows: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path service grant rows: %w", err)
 	}
 
 	route, err := scanRoute(s.db.QueryRow(ctx, `
@@ -241,32 +249,35 @@ func (s *Store) LoadQueryPathConfig(ctx context.Context, queryPathID string) (Qu
 		return config, nil
 	}
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path route: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path route: %w", err)
 	}
-	config.Route = &route
+	config.Route = &application.ConfiguredRouteSnapshot{
+		Route: route,
+		Hops:  []domain.RouteHop{},
+	}
 	hopRows, err := s.db.Query(ctx, `
 		select route_id, hop_index, service_id
 		from public.route_hops where route_id = $1
 		order by hop_index
 	`, route.ID)
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path hops: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path hops: %w", err)
 	}
 	defer hopRows.Close()
 	for hopRows.Next() {
 		var hop domain.RouteHop
 		if err := hopRows.Scan(&hop.RouteID, &hop.HopIndex, &hop.ServiceID); err != nil {
-			return QueryPathConfig{}, fmt.Errorf("load query path hop scan: %w", err)
+			return application.QueryPathSnapshot{}, fmt.Errorf("load query path hop scan: %w", err)
 		}
-		config.Hops = append(config.Hops, hop)
+		config.Route.Hops = append(config.Route.Hops, hop)
 	}
 	if err := hopRows.Err(); err != nil {
-		return QueryPathConfig{}, fmt.Errorf("load query path hop rows: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("load query path hop rows: %w", err)
 	}
 	return config, nil
 }
 
-func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID, path string) (QueryPathConfig, error) {
+func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID, path string) (application.QueryPathSnapshot, error) {
 	var id string
 	err := s.db.QueryRow(ctx, `
 		select qp.id
@@ -275,7 +286,7 @@ func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID, 
 		where b.canonical_id = $1 and qp.path = $2 and qp.state = 'enabled'
 	`, sourceCanonicalID, path).Scan(&id)
 	if err != nil {
-		return QueryPathConfig{}, fmt.Errorf("resolve enabled query path: %w", err)
+		return application.QueryPathSnapshot{}, fmt.Errorf("resolve enabled query path: %w", err)
 	}
 	return s.LoadQueryPathConfig(ctx, id)
 }

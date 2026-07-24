@@ -121,11 +121,9 @@ func (a *API) addNetworkNode(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := activeUser(r.Context()).ID
 	a.networkCanvas.add(userID, node.CanonicalID)
-	writeData(w, r, http.StatusOK, map[string]any{
-		"node_id":      node.CanonicalID,
-		"display_name": node.DisplayName,
-		"type":         node.Type,
-		"on_canvas":    true,
+	writeData(w, r, http.StatusOK, canvasNodeDTO{
+		NodeID: node.CanonicalID, DisplayName: node.DisplayName,
+		Type: node.Type, OnCanvas: true,
 	})
 }
 

@@ -16,9 +16,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/assets"
 	"secure-brain/internal/domain"
-	"secure-brain/internal/store"
 )
 
 func (a *API) listAssets(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +32,7 @@ func (a *API) listAssets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	writeData(w, r, http.StatusOK, items)
+	writeData(w, r, http.StatusOK, assetListResponse(items))
 }
 
 func (a *API) getAsset(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +46,7 @@ func (a *API) getAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The asset does not exist."))
 		return
 	}
-	writeData(w, r, http.StatusOK, asset)
+	writeData(w, r, http.StatusOK, assetResponse(asset))
 }
 
 func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +166,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 	if classification.ParseError != "" {
 		parseError = &classification.ParseError
 	}
-	input := store.AssetInput{ID: assetID, BrainID: brain.ID, ObjectKey: objectKey, StoragePath: storagePath, OriginalFilename: filename, MediaType: classification.MediaType, ByteSize: size, SHA256: &checksum, Format: domain.AssetFormat(classification.Format), ProcessingState: domain.AssetStateUploading, ParseError: parseError}
+	input := application.AssetWriteCommand{ID: assetID, BrainID: brain.ID, ObjectKey: objectKey, StoragePath: storagePath, OriginalFilename: filename, MediaType: classification.MediaType, ByteSize: size, SHA256: &checksum, Format: domain.AssetFormat(classification.Format), ProcessingState: domain.AssetStateUploading, ParseError: parseError}
 	if existingErr != nil {
 		if _, err := a.store.InsertAsset(r.Context(), input); err != nil {
 			writeError(w, r, databaseError(err))
@@ -202,11 +202,11 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 		eventType = "asset.overwritten"
 	}
-	a.audit(r, eventType, "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"object_key": result.ObjectKey, "byte_size": result.ByteSize, "sha256": result.SHA256}, []string{brain.OwnerUserID})
+	a.audit(r, eventType, "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"object_key": result.ObjectKey, "byte_size": result.ByteSize, "sha256": result.SHA256}, []string{brain.OwnerUserID})
 	if result.ProcessingState == domain.AssetStateParseFailed {
-		a.audit(r, "asset.parse_failed", "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusFailed, map[string]any{"object_key": result.ObjectKey}, []string{brain.OwnerUserID})
+		a.audit(r, "asset.parse_failed", "asset", result.ID, &brain.ID, nil, nil, domain.AuditStatusFailed, application.AuditMetadata{"object_key": result.ObjectKey}, []string{brain.OwnerUserID})
 	}
-	writeData(w, r, status, result)
+	writeData(w, r, status, assetResponse(result))
 }
 
 func (a *API) assetContent(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +248,9 @@ func (a *API) assetContent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeData(w, r, http.StatusOK, map[string]any{"asset": asset, "preview": preview})
+	writeData(w, r, http.StatusOK, assetContentDTO{
+		Asset: assetResponse(asset), Preview: assetPreviewResponse(preview),
+	})
 }
 
 func (a *API) deleteAsset(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +278,7 @@ func (a *API) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.objects.Delete(r.Context(), []string{asset.StoragePath})
-	a.audit(r, "asset.deleted", "asset", asset.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"object_key": asset.ObjectKey}, []string{brain.OwnerUserID})
+	a.audit(r, "asset.deleted", "asset", asset.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"object_key": asset.ObjectKey}, []string{brain.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 

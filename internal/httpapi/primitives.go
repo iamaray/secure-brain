@@ -61,7 +61,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 func writeData(w http.ResponseWriter, r *http.Request, status int, data any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "request_id": requestID(r.Context())})
+	_ = json.NewEncoder(w).Encode(dataEnvelope{Data: data, RequestID: requestID(r.Context())})
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
@@ -72,7 +72,12 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	status := statusForCode(appErr.Code)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": appErr, "request_id": requestID(r.Context())})
+	_ = json.NewEncoder(w).Encode(errorEnvelope{
+		Error: errorDTO{
+			Code: appErr.Code, Message: appErr.Message, Details: appErr.Details,
+		},
+		RequestID: requestID(r.Context()),
+	})
 }
 
 func statusForCode(code domain.Code) int {

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -182,7 +183,7 @@ func TestQueryPathConfigRoundTripAndVersionConflictIntegration(t *testing.T) {
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	checksum := "0000000000000000000000000000000000000000000000000000000000000000"
-	asset, err := db.InsertAsset(ctx, AssetInput{
+	asset, err := db.InsertAsset(ctx, application.AssetWriteCommand{
 		BrainID: source.ID, ObjectKey: "store-test-" + suffix + ".txt",
 		StoragePath: "store-tests/" + suffix, OriginalFilename: "store-test.txt",
 		MediaType: "text/plain", ByteSize: 4, SHA256: &checksum,
@@ -192,35 +193,35 @@ func TestQueryPathConfigRoundTripAndVersionConflictIntegration(t *testing.T) {
 		t.Fatalf("insert asset: %v", err)
 	}
 
-	created, err := db.CreateQueryPath(ctx, QueryPathConfigInput{
+	created, err := db.CreateQueryPath(ctx, application.QueryPathCommand{
 		BrainID: source.ID, Path: "/store-test-" + suffix,
 		Visibility: domain.VisibilityPrivate, State: domain.QueryPathStateEnabled,
 		Operations: []domain.Operation{domain.OperationRawRead}, AssetIDs: []string{asset.ID},
 		AllowedBrainIDs: []string{destination.ID}, AllowedServiceIDs: []string{notion.ID},
-		Route: &RouteInput{TerminalMode: domain.TerminalModeFixed,
+		Route: &application.RouteCommand{TerminalMode: domain.TerminalModeFixed,
 			DestinationBrainID: &destination.ID, ServiceIDs: []string{notion.ID, notion.ID}},
 	})
 	if err != nil {
 		t.Fatalf("create full query path config: %v", err)
 	}
-	if len(created.Hops) != 2 || created.Hops[0].ServiceID != notion.ID || created.Hops[1].ServiceID != notion.ID {
-		t.Fatalf("repeated hops not preserved: %#v", created.Hops)
+	if len(created.Route.Hops) != 2 || created.Route.Hops[0].ServiceID != notion.ID || created.Route.Hops[1].ServiceID != notion.ID {
+		t.Fatalf("repeated hops not preserved: %#v", created.Route.Hops)
 	}
 
-	replacement := QueryPathConfigInput{
+	replacement := application.QueryPathCommand{
 		BrainID: source.ID, Path: created.QueryPath.Path,
 		Visibility: domain.VisibilityPrivate, State: domain.QueryPathStateEnabled,
 		Operations: []domain.Operation{domain.OperationRawRead}, AssetIDs: []string{asset.ID},
 		AllowedBrainIDs: []string{destination.ID}, AllowedServiceIDs: []string{notion.ID, obsidian.ID},
-		Route: &RouteInput{TerminalMode: domain.TerminalModeFixed,
+		Route: &application.RouteCommand{TerminalMode: domain.TerminalModeFixed,
 			DestinationBrainID: &destination.ID, ServiceIDs: []string{notion.ID, obsidian.ID, notion.ID}},
 	}
 	updated, err := db.ReplaceQueryPath(ctx, created.QueryPath.ID, created.QueryPath.ConfigVersion, replacement)
 	if err != nil {
 		t.Fatalf("replace query path config: %v", err)
 	}
-	if updated.QueryPath.ConfigVersion != created.QueryPath.ConfigVersion+1 || len(updated.Hops) != 3 {
-		t.Fatalf("unexpected replacement: version=%d hops=%#v", updated.QueryPath.ConfigVersion, updated.Hops)
+	if updated.QueryPath.ConfigVersion != created.QueryPath.ConfigVersion+1 || len(updated.Route.Hops) != 3 {
+		t.Fatalf("unexpected replacement: version=%d hops=%#v", updated.QueryPath.ConfigVersion, updated.Route.Hops)
 	}
 	_, err = db.ReplaceQueryPath(ctx, created.QueryPath.ID, created.QueryPath.ConfigVersion, replacement)
 	if !errors.Is(err, ErrVersionConflict) {
@@ -230,7 +231,7 @@ func TestQueryPathConfigRoundTripAndVersionConflictIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload query path config: %v", err)
 	}
-	if reloaded.QueryPath.ConfigVersion != updated.QueryPath.ConfigVersion || len(reloaded.Hops) != 3 {
-		t.Fatalf("stale update mutated config: version=%d hops=%#v", reloaded.QueryPath.ConfigVersion, reloaded.Hops)
+	if reloaded.QueryPath.ConfigVersion != updated.QueryPath.ConfigVersion || len(reloaded.Route.Hops) != 3 {
+		t.Fatalf("stale update mutated config: version=%d hops=%#v", reloaded.QueryPath.ConfigVersion, reloaded.Route.Hops)
 	}
 }

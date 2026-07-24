@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 	"secure-brain/internal/query"
 	"secure-brain/internal/routes"
@@ -22,8 +23,36 @@ import (
 )
 
 type invocationRequest struct {
-	InitiatingBrainID string        `json:"initiating_brain_id,omitempty"`
-	Query             query.Request `json:"query"`
+	InitiatingBrainID string   `json:"initiating_brain_id,omitempty"`
+	Query             queryDTO `json:"query"`
+}
+
+type queryDTO struct {
+	Operation string           `json:"operation"`
+	Query     string           `json:"query,omitempty"`
+	Select    []string         `json:"select,omitempty"`
+	Filters   []queryFilterDTO `json:"filters,omitempty"`
+	Limit     int              `json:"limit,omitempty"`
+	Offset    int              `json:"offset,omitempty"`
+}
+
+type queryFilterDTO struct {
+	Column   string `json:"column"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
+}
+
+func queryCommand(body queryDTO) application.QueryCommand {
+	filters := make([]application.QueryFilter, len(body.Filters))
+	for i, filter := range body.Filters {
+		filters[i] = application.QueryFilter{
+			Column: filter.Column, Operator: filter.Operator, Value: filter.Value,
+		}
+	}
+	return application.QueryCommand{
+		Operation: body.Operation, Query: body.Query, Select: body.Select,
+		Filters: filters, Limit: body.Limit, Offset: body.Offset,
+	}
 }
 
 func (a *API) pullQueryPath(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +82,7 @@ func (a *API) pullQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInitiatorNotOwned, "The initiating Brain is not owned by the active user."))
 		return
 	}
-	result, appErr := a.executeRoute(r, domain.ExecutionModePull, source, initiator, config, body.Query)
+	result, appErr := a.executeRoute(r, domain.ExecutionModePull, source, initiator, config, queryCommand(body.Query))
 	if appErr != nil {
 		var typed *domain.Error
 		if config.QueryPath.Visibility == domain.VisibilityPrivate && source.OwnerUserID != activeUser(r.Context()).ID && errors.As(appErr, &typed) {
@@ -63,7 +92,7 @@ func (a *API) pullQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, appErr)
 		return
 	}
-	writeData(w, r, http.StatusOK, result)
+	writeData(w, r, http.StatusOK, routeExecutionResultResponse(result))
 }
 
 func (a *API) sendQueryPath(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +116,7 @@ func (a *API) sendQueryPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Query query.Request `json:"query"`
+		Query queryDTO `json:"query"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, r, err)
@@ -103,22 +132,23 @@ func (a *API) sendQueryPath(w http.ResponseWriter, r *http.Request) {
 		writeData(w, r, *record.ResponseStatus, replay)
 		return
 	}
-	result, appErr := a.executeRoute(r, domain.ExecutionModePush, brain, brain, config, body.Query)
+	result, appErr := a.executeRoute(r, domain.ExecutionModePush, brain, brain, config, queryCommand(body.Query))
 	if appErr != nil {
 		writeError(w, r, appErr)
 		return
 	}
-	responseBytes, _ := json.Marshal(result)
+	response := routeExecutionResultResponse(result)
+	responseBytes, _ := json.Marshal(response)
 	_, _ = a.store.CompleteIdempotencyRecord(r.Context(), record.ID, http.StatusCreated, responseBytes)
-	writeData(w, r, http.StatusCreated, result)
+	writeData(w, r, http.StatusCreated, response)
 }
 
-func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, initiator domain.Brain, config store.QueryPathConfig, request query.Request) (map[string]any, error) {
+func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, initiator domain.Brain, config application.QueryPathSnapshot, request application.QueryCommand) (application.RouteExecutionResult, error) {
 	if initiator.OwnerUserID != activeUser(r.Context()).ID {
-		return nil, domain.NewError(domain.CodeInitiatorNotOwned, "The active user does not own the initiating Brain.")
+		return application.RouteExecutionResult{}, domain.NewError(domain.CodeInitiatorNotOwned, "The active user does not own the initiating Brain.")
 	}
 	if config.Route == nil {
-		return nil, domain.NewError(domain.CodeRouteInvalid, "The enabled path has no route.")
+		return application.RouteExecutionResult{}, domain.NewError(domain.CodeRouteInvalid, "The enabled path has no route.")
 	}
 	allowedOperation := false
 	for _, operation := range config.QueryPath.Operations {
@@ -128,68 +158,73 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 		}
 	}
 	if !allowedOperation {
-		return nil, domain.NewError(domain.CodeOperationNotAllowed, "The operation is not enabled on this query path.")
+		return application.RouteExecutionResult{}, domain.NewError(domain.CodeOperationNotAllowed, "The operation is not enabled on this query path.")
 	}
-	services := make([]domain.Service, 0, len(config.Hops))
-	serviceIDs := make([]string, 0, len(config.Hops))
-	for _, hop := range config.Hops {
+	services := make([]domain.Service, 0, len(config.Route.Hops))
+	serviceIDs := make([]string, 0, len(config.Route.Hops))
+	for _, hop := range config.Route.Hops {
 		service, err := a.store.GetService(r.Context(), hop.ServiceID)
 		if err != nil || service.Status != domain.NodeStatusReady {
-			return nil, domain.NewError(domain.CodeRouteInvalid, "A saved route Service is unavailable.")
+			return application.RouteExecutionResult{}, domain.NewError(domain.CodeRouteInvalid, "A saved route Service is unavailable.")
 		}
 		services, serviceIDs = append(services, service), append(serviceIDs, service.CanonicalID)
 	}
 	terminal := "caller"
 	var destination domain.Brain
-	if config.Route.TerminalMode == domain.TerminalModeFixed {
-		if config.Route.DestinationBrainID == nil {
-			return nil, domain.NewError(domain.CodeRouteInvalid, "The route destination is invalid.")
+	if config.Route.Route.TerminalMode == domain.TerminalModeFixed {
+		if config.Route.Route.DestinationBrainID == nil {
+			return application.RouteExecutionResult{}, domain.NewError(domain.CodeRouteInvalid, "The route destination is invalid.")
 		}
-		value, err := a.store.GetBrain(r.Context(), *config.Route.DestinationBrainID)
+		value, err := a.store.GetBrain(r.Context(), *config.Route.Route.DestinationBrainID)
 		if err != nil {
-			return nil, domain.NewError(domain.CodeRouteInvalid, "The route destination is unavailable.")
+			return application.RouteExecutionResult{}, domain.NewError(domain.CodeRouteInvalid, "The route destination is unavailable.")
 		}
 		destination, terminal = value, value.CanonicalID
 	} else {
 		destination = initiator
 	}
 	brainGrants, serviceGrants := []string{}, []string{}
-	for _, brain := range config.AllowedBrains {
+	for _, brain := range config.Policy.AllowedBrains {
 		brainGrants = append(brainGrants, brain.CanonicalID)
 	}
-	for _, service := range config.AllowedServices {
+	for _, service := range config.Policy.AllowedServices {
 		serviceGrants = append(serviceGrants, service.CanonicalID)
 	}
-	snapshot := map[string]any{"source_canonical_id": source.CanonicalID, "source_path": config.QueryPath.Path, "config_version": config.QueryPath.ConfigVersion, "visibility": config.QueryPath.Visibility, "asset_ids": assetSnapshot(config.Assets), "operation": request.Operation, "service_hops": serviceIDs, "terminal": terminal, "resolved_destination": destination.CanonicalID}
-	snapshotBytes, _ := json.Marshal(snapshot)
+	snapshot := application.RouteSnapshot{
+		SourceCanonicalID: source.CanonicalID, SourcePath: config.QueryPath.Path,
+		ConfigVersion: config.QueryPath.ConfigVersion, Visibility: config.QueryPath.Visibility,
+		Assets: assetSnapshot(config.Assets), Operation: domain.Operation(request.Operation),
+		ServiceHops: serviceIDs, Terminal: terminal,
+		ResolvedDestination: destination.CanonicalID,
+	}
 	now := a.now().UTC()
 	actorID, initiatorID, sourceID, destinationID, queryPathID := activeUser(r.Context()).ID, initiator.ID, source.ID, destination.ID, config.QueryPath.ID
 	destinationCanonical := destination.CanonicalID
-	execution, err := a.store.InsertExecution(r.Context(), store.ExecutionInput{ID: newUUID(), Mode: mode, QueryPathID: &queryPathID, ActorUserID: &actorID, InitiatingBrainID: &initiatorID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, SourcePath: config.QueryPath.Path, DestinationCanonicalID: &destinationCanonical, Operation: domain.Operation(request.Operation), State: domain.ExecutionStateAuthorizing, RouteSnapshot: snapshotBytes, ResultMetadata: json.RawMessage(`{}`)})
+	execution, err := a.store.InsertExecution(r.Context(), application.ExecutionStartCommand{ID: newUUID(), Mode: mode, QueryPathID: &queryPathID, ActorUserID: &actorID, InitiatingBrainID: &initiatorID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, SourcePath: config.QueryPath.Path, DestinationCanonicalID: &destinationCanonical, Operation: domain.Operation(request.Operation), State: domain.ExecutionStateAuthorizing, Route: snapshot})
 	if err != nil {
-		return nil, databaseError(err)
+		return application.RouteExecutionResult{}, databaseError(err)
 	}
 	viewers := executionViewers(source, destination, services, actorID)
-	a.audit(r, "route.execution_started", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, map[string]any{"mode": mode, "operation": request.Operation}, []string{source.OwnerUserID})
+	a.audit(r, "route.execution_started", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, application.AuditMetadata{"mode": mode, "operation": request.Operation}, []string{source.OwnerUserID})
 	_, authErr := routes.Authorize(routes.AuthorizationInput{Mode: mode, Visibility: config.QueryPath.Visibility, SourceBrainID: source.CanonicalID, InitiatingBrainID: initiator.CanonicalID, InitiatorOwned: initiator.OwnerUserID == actorID, InitiatorRegistered: true, Terminal: terminal, BrainGrants: brainGrants, ServiceGrants: serviceGrants, ServiceHops: serviceIDs, MaxHops: a.maxRouteHops})
 	if authErr != nil {
 		code := errorCode(authErr)
 		message := "Route authorization was denied."
 		completed := a.now().UTC()
-		_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateFailed, ErrorCode: &code, ErrorMessage: &message, CompletedAt: &completed})
-		a.audit(r, "route.authorization_denied", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusDenied, map[string]any{"error_code": code}, []string{source.OwnerUserID})
-		return nil, authErr
+		_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, application.ExecutionTransitionCommand{State: domain.ExecutionStateFailed, ErrorCode: &code, ErrorMessage: &message, CompletedAt: &completed})
+		a.audit(r, "route.authorization_denied", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusDenied, application.AuditMetadata{"error_code": code}, []string{source.OwnerUserID})
+		return application.RouteExecutionResult{}, authErr
 	}
-	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateReading, StartedAt: &now})
+	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, application.ExecutionTransitionCommand{State: domain.ExecutionStateReading, StartedAt: &now})
 	loaded := make([]query.Asset, 0, len(config.Assets))
 	total := 0
 	for _, asset := range config.Assets {
 		if asset.ProcessingState != domain.AssetStateReady && !(asset.ProcessingState == domain.AssetStateParseFailed && request.Operation == query.OperationRawRead) {
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset is unavailable.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset is unavailable.")
 		}
 		body, _, getErr := a.objects.Get(r.Context(), asset.StoragePath)
 		if getErr != nil {
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset could not be read.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset could not be read.")
 		}
 		remaining := a.maxRoutePayloadBytes - total
 		if remaining < 0 {
@@ -198,23 +233,31 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 		bytes, readErr := io.ReadAll(io.LimitReader(body, int64(remaining)+1))
 		body.Close()
 		if readErr != nil || len(bytes) > remaining {
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset could not be read.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset could not be read.")
 		}
 		sum := sha256.Sum256(bytes)
 		if asset.SHA256 != "" && hex.EncodeToString(sum[:]) != asset.SHA256 {
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset checksum did not match.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeAssetUnavailable, "A scoped asset checksum did not match.")
 		}
 		total += len(bytes)
 		if total > a.maxRoutePayloadBytes {
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodePayloadTooLarge, "The routed payload exceeds the configured limit.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodePayloadTooLarge, "The routed payload exceeds the configured limit.")
 		}
 		loaded = append(loaded, query.Asset{Asset: asset, Bytes: bytes})
 	}
-	payload, err := query.Execute(loaded, request, query.Limits{MaxPayloadBytes: a.maxRoutePayloadBytes, MaxCSVRows: a.maxCSVRows})
-	if err != nil {
-		return nil, a.failExecution(r, execution.ID, source.ID, viewers, errorCode(err), safeErrorMessage(err))
+	filters := make([]query.Filter, len(request.Filters))
+	for i, filter := range request.Filters {
+		filters[i] = query.Filter{Column: filter.Column, Operator: filter.Operator, Value: filter.Value}
 	}
-	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateProcessing, StartedAt: &now})
+	queryRequest := query.Request{
+		Operation: request.Operation, Query: request.Query, Select: request.Select,
+		Filters: filters, Limit: request.Limit, Offset: request.Offset,
+	}
+	payload, err := query.Execute(loaded, queryRequest, query.Limits{MaxPayloadBytes: a.maxRoutePayloadBytes, MaxCSVRows: a.maxCSVRows})
+	if err != nil {
+		return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, errorCode(err), safeErrorMessage(err))
+	}
+	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, application.ExecutionTransitionCommand{State: domain.ExecutionStateProcessing, StartedAt: &now})
 	output, hops, err := routes.ExecuteHops(r.Context(), routes.IdentityServiceExecutor{}, services, payload)
 	for _, hop := range hops {
 		serviceID, errorCodeValue := hop.ServiceID, (*domain.Code)(nil)
@@ -222,54 +265,60 @@ func (a *API) executeRoute(r *http.Request, mode domain.ExecutionMode, source, i
 			value := *hop.ErrorCode
 			errorCodeValue = &value
 		}
-		_, _ = a.store.InsertExecutionHop(r.Context(), store.ExecutionHopInput{ID: newUUID(), ExecutionID: execution.ID, HopIndex: hop.HopIndex, ServiceID: &serviceID, ServiceCanonicalID: hop.ServiceCanonicalID, Status: hop.Status, InputSHA256: hop.InputSHA256, OutputSHA256: hop.OutputSHA256, DurationMS: hop.DurationMS, ErrorCode: errorCodeValue})
+		_, _ = a.store.InsertExecutionHop(r.Context(), application.ExecutionHopCommand{ID: newUUID(), ExecutionID: execution.ID, HopIndex: hop.HopIndex, ServiceID: &serviceID, ServiceCanonicalID: hop.ServiceCanonicalID, Status: hop.Status, InputSHA256: hop.InputSHA256, OutputSHA256: hop.OutputSHA256, DurationMS: hop.DurationMS, ErrorCode: errorCodeValue})
 		eventType, auditStatus := "route.hop_completed", domain.AuditStatusSucceeded
 		if hop.Status == domain.HopStatusFailed {
 			eventType, auditStatus = "route.execution_failed", domain.AuditStatusFailed
 		}
-		a.audit(r, eventType, "execution", execution.ID, &source.ID, &serviceID, &execution.ID, auditStatus, map[string]any{"hop_index": hop.HopIndex, "service_id": hop.ServiceCanonicalID, "input_sha256": hop.InputSHA256, "output_sha256": hop.OutputSHA256}, viewers)
+		a.audit(r, eventType, "execution", execution.ID, &source.ID, &serviceID, &execution.ID, auditStatus, application.AuditMetadata{"hop_index": hop.HopIndex, "service_id": hop.ServiceCanonicalID, "input_sha256": hop.InputSHA256, "output_sha256": hop.OutputSHA256}, viewers)
 	}
 	if err != nil {
-		return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeServiceHopFailed, "A route Service failed.")
+		return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeServiceHopFailed, "A route Service failed.")
 	}
-	metadata := map[string]any{"media_type": output.MediaType, "byte_size": len(output.Bytes), "suggested_filename": output.SuggestedFilename, "sha256": checksumBytes(output.Bytes)}
+	payloadSnapshot := application.SnapshotPayload(output)
+	metadata := application.ExecutionResultSnapshot{
+		MediaType: payloadSnapshot.MediaType, ByteSize: len(payloadSnapshot.Bytes),
+		SuggestedFilename: payloadSnapshot.SuggestedFilename, SHA256: checksumBytes(payloadSnapshot.Bytes),
+	}
+	auditMetadata := application.AuditMetadata{"media_type": metadata.MediaType, "byte_size": metadata.ByteSize, "suggested_filename": metadata.SuggestedFilename, "sha256": metadata.SHA256}
 	completed := a.now().UTC()
-	metadataBytes, _ := json.Marshal(metadata)
 	if mode == domain.ExecutionModePush {
 		transferID := newUUID()
 		storagePath := fmt.Sprintf("transfers/%s/%s", transferID, checksumBytes(output.Bytes))
 		if err := a.objects.Put(r.Context(), storagePath, output.MediaType, bytes.NewReader(output.Bytes), int64(len(output.Bytes)), false); err != nil {
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeStorageProviderError, "The transfer payload could not be stored.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeStorageProviderError, "The transfer payload could not be stored.")
 		}
 		suggestedKey := "inbox/" + filepath.Base(output.SuggestedFilename)
 		if strings.TrimSuffix(suggestedKey, "inbox/") == "" {
 			suggestedKey = "inbox/transfer.json"
 		}
-		transfer, insertErr := a.store.InsertTransfer(r.Context(), store.TransferInput{ID: transferID, ExecutionID: execution.ID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, DestinationCanonicalID: destination.CanonicalID, StoragePath: storagePath, SuggestedObjectKey: suggestedKey, SuggestedFilename: output.SuggestedFilename, MediaType: output.MediaType, ByteSize: int64(len(output.Bytes)), SHA256: checksumBytes(output.Bytes), ExpiresAt: completed.Add(a.transferTTL)})
+		transfer, insertErr := a.store.InsertTransfer(r.Context(), application.TransferCreateCommand{ID: transferID, ExecutionID: execution.ID, SourceBrainID: &sourceID, DestinationBrainID: &destinationID, SourceCanonicalID: source.CanonicalID, DestinationCanonicalID: destination.CanonicalID, StoragePath: storagePath, SuggestedObjectKey: suggestedKey, SuggestedFilename: output.SuggestedFilename, MediaType: output.MediaType, ByteSize: int64(len(output.Bytes)), SHA256: checksumBytes(output.Bytes), ExpiresAt: completed.Add(a.transferTTL)})
 		if insertErr != nil {
 			_ = a.objects.Delete(r.Context(), []string{storagePath})
-			return nil, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeInvalidRequest, "The transfer could not be created.")
+			return application.RouteExecutionResult{}, a.failExecution(r, execution.ID, source.ID, viewers, domain.CodeInvalidRequest, "The transfer could not be created.")
 		}
-		_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateDelivered, ResultMetadata: metadataBytes, StartedAt: &now, CompletedAt: &completed})
-		a.audit(r, "transfer.created", "transfer", transfer.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, map[string]any{"destination": destination.CanonicalID, "byte_size": len(output.Bytes)}, viewers)
-		a.audit(r, "route.execution_completed", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusSucceeded, metadata, viewers)
-		return map[string]any{"execution_id": execution.ID, "route_id": config.Route.ID, "source": source.CanonicalID, "source_path": config.QueryPath.Path, "destination": destination.CanonicalID, "outcome": "delivered", "transfer": transfer}, nil
+		_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, application.ExecutionTransitionCommand{State: domain.ExecutionStateDelivered, Result: metadata, StartedAt: &now, CompletedAt: &completed})
+		a.audit(r, "transfer.created", "transfer", transfer.ID, &source.ID, nil, &execution.ID, domain.AuditStatusPending, application.AuditMetadata{"destination": destination.CanonicalID, "byte_size": len(output.Bytes)}, viewers)
+		a.audit(r, "route.execution_completed", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusSucceeded, auditMetadata, viewers)
+		return application.RouteExecutionResult{ExecutionID: execution.ID, RouteID: config.Route.Route.ID, Source: source.CanonicalID, SourcePath: config.QueryPath.Path, Destination: destination.CanonicalID, Outcome: "delivered", Transfer: &transfer}, nil
 	}
-	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, store.ExecutionUpdate{State: domain.ExecutionStateDelivered, ResultMetadata: metadataBytes, StartedAt: &now, CompletedAt: &completed})
-	a.audit(r, "route.execution_completed", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusSucceeded, metadata, viewers)
-	result := map[string]any{"execution_id": execution.ID, "route_id": config.Route.ID, "source": source.CanonicalID, "source_path": config.QueryPath.Path, "destination": destination.CanonicalID, "outcome": "delivered", "result": metadata}
+	_, _ = a.store.UpdateExecutionState(r.Context(), execution.ID, application.ExecutionTransitionCommand{State: domain.ExecutionStateDelivered, Result: metadata, StartedAt: &now, CompletedAt: &completed})
+	a.audit(r, "route.execution_completed", "execution", execution.ID, &source.ID, nil, &execution.ID, domain.AuditStatusSucceeded, auditMetadata, viewers)
+	result := application.RouteExecutionResult{ExecutionID: execution.ID, RouteID: config.Route.Route.ID, Source: source.CanonicalID, SourcePath: config.QueryPath.Path, Destination: destination.CanonicalID, Outcome: "delivered", Result: &metadata}
 	if utf8.Valid(output.Bytes) && (strings.HasPrefix(output.MediaType, "text/") || output.MediaType == "application/json") {
-		result["text"] = string(output.Bytes)
+		text := string(output.Bytes)
+		result.Text = &text
 	} else {
-		result["data_base64"] = base64.StdEncoding.EncodeToString(output.Bytes)
+		encoded := base64.StdEncoding.EncodeToString(output.Bytes)
+		result.DataBase64 = &encoded
 	}
 	return result, nil
 }
 
-func assetSnapshot(values []domain.Asset) []map[string]string {
-	result := make([]map[string]string, 0, len(values))
+func assetSnapshot(values []domain.Asset) []application.AssetIntegritySnapshot {
+	result := make([]application.AssetIntegritySnapshot, 0, len(values))
 	for _, value := range values {
-		result = append(result, map[string]string{"asset_id": value.ID, "sha256": value.SHA256})
+		result = append(result, application.AssetIntegritySnapshot{AssetID: value.ID, SHA256: value.SHA256})
 	}
 	return result
 }
@@ -294,8 +343,8 @@ func safeErrorMessage(err error) string {
 
 func (a *API) failExecution(r *http.Request, executionID, sourceBrainID string, viewers []string, code domain.Code, message string) error {
 	completed := a.now().UTC()
-	_, _ = a.store.UpdateExecutionState(r.Context(), executionID, store.ExecutionUpdate{State: domain.ExecutionStateFailed, ErrorCode: &code, ErrorMessage: &message, CompletedAt: &completed})
-	a.audit(r, "route.execution_failed", "execution", executionID, &sourceBrainID, nil, &executionID, domain.AuditStatusFailed, map[string]any{"error_code": code}, viewers)
+	_, _ = a.store.UpdateExecutionState(r.Context(), executionID, application.ExecutionTransitionCommand{State: domain.ExecutionStateFailed, ErrorCode: &code, ErrorMessage: &message, CompletedAt: &completed})
+	a.audit(r, "route.execution_failed", "execution", executionID, &sourceBrainID, nil, &executionID, domain.AuditStatusFailed, application.AuditMetadata{"error_code": code}, viewers)
 	return domain.NewError(code, message)
 }
 
@@ -317,13 +366,12 @@ func uniqueStrings(values []string) []string {
 	}
 	return result
 }
-func (a *API) audit(r *http.Request, eventType, resourceType, resourceID string, brainID, serviceID, executionID *string, status domain.AuditStatus, metadata map[string]any, viewers []string) {
+func (a *API) audit(r *http.Request, eventType, resourceType, resourceID string, brainID, serviceID, executionID *string, status domain.AuditStatus, metadata application.AuditMetadata, viewers []string) {
 	actor := activeUser(r.Context()).ID
 	if metadata == nil {
-		metadata = map[string]any{}
+		metadata = application.AuditMetadata{}
 	}
-	bytes, _ := json.Marshal(metadata)
-	_, _ = a.store.InsertAuditEvent(r.Context(), store.AuditEventInput{ID: newUUID(), EventType: eventType, ActorUserID: &actor, ResourceType: resourceType, ResourceID: &resourceID, BrainID: brainID, ServiceID: serviceID, ExecutionID: executionID, Status: status, Metadata: bytes, ViewerUserIDs: uniqueStrings(viewers)})
+	_, _ = a.store.InsertAuditEvent(r.Context(), application.AuditRecordCommand{ID: newUUID(), EventType: eventType, ActorUserID: &actor, ResourceType: resourceType, ResourceID: &resourceID, BrainID: brainID, ServiceID: serviceID, ExecutionID: executionID, Status: status, Metadata: metadata, ViewerUserIDs: uniqueStrings(viewers)})
 }
 
 func (a *API) getExecution(w http.ResponseWriter, r *http.Request) {
@@ -332,7 +380,7 @@ func (a *API) getExecution(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeData(w, r, http.StatusOK, execution)
+	writeData(w, r, http.StatusOK, executionResponse(execution))
 }
 func (a *API) getExecutionTrace(w http.ResponseWriter, r *http.Request) {
 	execution, err := a.visibleExecution(r)
@@ -345,12 +393,14 @@ func (a *API) getExecutionTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	writeData(w, r, http.StatusOK, map[string]any{"execution": execution, "hops": hops})
+	writeData(w, r, http.StatusOK, executionTraceDTO{
+		Execution: executionResponse(execution), Hops: executionHopListResponse(hops),
+	})
 }
-func (a *API) visibleExecution(r *http.Request) (domain.RouteExecution, error) {
+func (a *API) visibleExecution(r *http.Request) (application.RouteExecutionSnapshot, error) {
 	execution, err := a.store.GetExecution(r.Context(), r.PathValue("executionId"))
 	if err != nil {
-		return domain.RouteExecution{}, domain.NewError(domain.CodeNodeNotFound, "The execution does not exist.")
+		return application.RouteExecutionSnapshot{}, domain.NewError(domain.CodeNodeNotFound, "The execution does not exist.")
 	}
 	userID := activeUser(r.Context()).ID
 	if execution.State == domain.ExecutionStateFailed && execution.ErrorCode != nil && (*execution.ErrorCode == domain.CodePrincipalNotAuthorized || *execution.ErrorCode == domain.CodeDestinationMismatch) {
@@ -359,7 +409,7 @@ func (a *API) visibleExecution(r *http.Request) (domain.RouteExecution, error) {
 				return execution, nil
 			}
 		}
-		return domain.RouteExecution{}, domain.NewError(domain.CodeNotAuthorized, "The execution is not visible to this user.")
+		return application.RouteExecutionSnapshot{}, domain.NewError(domain.CodeNotAuthorized, "The execution is not visible to this user.")
 	}
 	visible := execution.ActorUserID != nil && *execution.ActorUserID == userID
 	for _, id := range []*string{execution.SourceBrainID, execution.DestinationBrainID, execution.InitiatingBrainID} {
@@ -370,7 +420,7 @@ func (a *API) visibleExecution(r *http.Request) (domain.RouteExecution, error) {
 		}
 	}
 	if !visible {
-		return domain.RouteExecution{}, domain.NewError(domain.CodeNotAuthorized, "The execution is not visible to this user.")
+		return application.RouteExecutionSnapshot{}, domain.NewError(domain.CodeNotAuthorized, "The execution is not visible to this user.")
 	}
 	return execution, nil
 }
@@ -382,7 +432,7 @@ func requireIdempotencyKey(r *http.Request) (string, error) {
 	}
 	return key, nil
 }
-func (a *API) startIdempotency(r *http.Request, scope, key string, body []byte) (store.IdempotencyRecord, any, error) {
+func (a *API) startIdempotency(r *http.Request, scope, key string, body []byte) (application.IdempotencySnapshot, json.RawMessage, error) {
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
 	userID := activeUser(r.Context()).ID
@@ -391,21 +441,25 @@ func (a *API) startIdempotency(r *http.Request, scope, key string, body []byte) 
 		return record, nil, nil
 	}
 	if !errors.Is(err, store.ErrIdempotencyExists) {
-		return store.IdempotencyRecord{}, nil, databaseError(err)
+		return application.IdempotencySnapshot{}, nil, databaseError(err)
 	}
 	record, err = a.store.GetIdempotencyRecord(r.Context(), userID, scope, key)
 	if err != nil {
-		return store.IdempotencyRecord{}, nil, databaseError(err)
+		return application.IdempotencySnapshot{}, nil, databaseError(err)
 	}
 	if record.RequestHash != hash {
-		return store.IdempotencyRecord{}, nil, domain.NewError(domain.CodeIdempotencyKeyReused, "The idempotency key was already used with a different request.")
+		return application.IdempotencySnapshot{}, nil, domain.NewError(domain.CodeIdempotencyKeyReused, "The idempotency key was already used with a different request.")
 	}
 	if record.ResponseStatus == nil {
-		return store.IdempotencyRecord{}, nil, domain.NewError(domain.CodeIdempotencyKeyReused, "The idempotent request is still in progress.")
+		return application.IdempotencySnapshot{}, nil, domain.NewError(domain.CodeIdempotencyKeyReused, "The idempotent request is still in progress.")
 	}
-	var replay any
-	if err := json.Unmarshal(record.ResponseBody, &replay); err != nil {
-		return store.IdempotencyRecord{}, nil, databaseError(err)
+	var replayValue any
+	if err := json.Unmarshal(record.ResponseBody, &replayValue); err != nil {
+		return application.IdempotencySnapshot{}, nil, databaseError(err)
 	}
-	return record, replay, nil
+	normalized, err := json.Marshal(replayValue)
+	if err != nil {
+		return application.IdempotencySnapshot{}, nil, databaseError(err)
+	}
+	return record, json.RawMessage(normalized), nil
 }

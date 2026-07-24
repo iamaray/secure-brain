@@ -209,8 +209,6 @@ type RouteExecution struct {
 	DestinationCanonicalID *string        `json:"destination_canonical_id,omitempty"`
 	Operation              Operation      `json:"operation"`
 	State                  ExecutionState `json:"state"`
-	RouteSnapshot          map[string]any `json:"route_snapshot"`
-	ResultMetadata         map[string]any `json:"result_metadata"`
 	ErrorCode              *Code          `json:"error_code,omitempty"`
 	ErrorMessage           *string        `json:"error_message,omitempty"`
 	CreatedAt              time.Time      `json:"created_at"`
@@ -263,23 +261,32 @@ type ChatMessage struct {
 }
 
 type AuditEvent struct {
-	ID           string         `json:"id"`
-	EventType    string         `json:"event_type"`
-	ActorUserID  *string        `json:"actor_user_id,omitempty"`
-	ResourceType string         `json:"resource_type"`
-	ResourceID   *string        `json:"resource_id,omitempty"`
-	BrainID      *string        `json:"brain_id,omitempty"`
-	ServiceID    *string        `json:"service_id,omitempty"`
-	ExecutionID  *string        `json:"execution_id,omitempty"`
-	Status       AuditStatus    `json:"status"`
-	Metadata     map[string]any `json:"metadata"`
-	CreatedAt    time.Time      `json:"created_at"`
+	ID           string        `json:"id"`
+	EventType    string        `json:"event_type"`
+	ActorUserID  *string       `json:"actor_user_id,omitempty"`
+	ResourceType string        `json:"resource_type"`
+	ResourceID   *string       `json:"resource_id,omitempty"`
+	BrainID      *string       `json:"brain_id,omitempty"`
+	ServiceID    *string       `json:"service_id,omitempty"`
+	ExecutionID  *string       `json:"execution_id,omitempty"`
+	Status       AuditStatus   `json:"status"`
+	Metadata     AuditMetadata `json:"metadata"`
+	CreatedAt    time.Time     `json:"created_at"`
 }
+
+// AuditMetadata contains bounded, non-sensitive event context. Each event type
+// owns its allowed keys; payload bytes, chat text, and secrets are forbidden.
+type AuditMetadata map[string]any
 
 // Payload is the byte-preserving representation passed through route Services.
 type Payload struct {
-	Bytes             []byte         `json:"-"`
-	MediaType         string         `json:"media_type"`
-	SuggestedFilename string         `json:"suggested_filename"`
-	Metadata          map[string]any `json:"metadata"`
+	Bytes             []byte          `json:"-"`
+	MediaType         string          `json:"media_type"`
+	SuggestedFilename string          `json:"suggested_filename"`
+	Metadata          PayloadMetadata `json:"metadata"`
 }
+
+// PayloadMetadata is operation-specific structured context. Current allowed
+// keys are operation, asset_count, asset_ids, structured, match_count,
+// truncated, file_count, and returned_row_count.
+type PayloadMetadata map[string]any

@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/assets"
 	"secure-brain/internal/domain"
 	"secure-brain/internal/store"
@@ -40,12 +41,12 @@ func (a *API) listTransfers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "status is invalid."))
 		return
 	}
-	items, err := a.store.ListTransfers(r.Context(), store.TransferFilter{BrainID: brain.ID, Direction: direction, Status: status, Limit: 50})
+	items, err := a.store.ListTransfers(r.Context(), application.TransferQuery{BrainID: brain.ID, Direction: direction, Status: status, Limit: 50})
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	writeData(w, r, http.StatusOK, items)
+	writeData(w, r, http.StatusOK, transferListResponse(items))
 }
 
 func (a *API) getTransfer(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +56,7 @@ func (a *API) getTransfer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	result := map[string]any{"transfer": transfer}
+	result := transferDetailDTO{Transfer: transferResponse(transfer)}
 	if r.URL.Query().Get("preview") == "true" {
 		if !destinationOwned {
 			writeError(w, r, domain.NewError(domain.CodeNotAuthorized, "Only the destination owner may preview this transfer."))
@@ -77,14 +78,16 @@ func (a *API) getTransfer(w http.ResponseWriter, r *http.Request) {
 		if truncated {
 			data = data[:limit]
 		}
-		preview := map[string]any{"truncated": truncated}
+		preview := transferPreviewDTO{Truncated: truncated}
 		if utf8.Valid(data) && (strings.HasPrefix(transfer.MediaType, "text/") || transfer.MediaType == "application/json") {
-			preview["text"] = string(data)
+			text := string(data)
+			preview.Text = &text
 		} else {
-			preview["data_base64"] = base64.StdEncoding.EncodeToString(data)
+			encoded := base64.StdEncoding.EncodeToString(data)
+			preview.DataBase64 = &encoded
 		}
-		result["preview"] = preview
-		a.audit(r, "transfer.previewed", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusAllowed, map[string]any{"truncated": truncated}, []string{activeUser(r.Context()).ID})
+		result.Preview = &preview
+		a.audit(r, "transfer.previewed", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusAllowed, application.AuditMetadata{"truncated": truncated}, []string{activeUser(r.Context()).ID})
 	}
 	writeData(w, r, http.StatusOK, result)
 }
@@ -201,7 +204,7 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 			format = domain.AssetFormatCSV
 		}
 		checksum := locked.SHA256
-		accepted, lockErr = tx.InsertAsset(r.Context(), store.AssetInput{ID: assetID, BrainID: *locked.DestinationBrainID, ObjectKey: body.ObjectKey, StoragePath: destinationPath, OriginalFilename: filepath.Base(locked.SuggestedFilename), MediaType: locked.MediaType, ByteSize: locked.ByteSize, SHA256: &checksum, Format: format, ProcessingState: domain.AssetStateReady})
+		accepted, lockErr = tx.InsertAsset(r.Context(), application.AssetWriteCommand{ID: assetID, BrainID: *locked.DestinationBrainID, ObjectKey: body.ObjectKey, StoragePath: destinationPath, OriginalFilename: filepath.Base(locked.SuggestedFilename), MediaType: locked.MediaType, ByteSize: locked.ByteSize, SHA256: &checksum, Format: format, ProcessingState: domain.AssetStateReady})
 		if lockErr != nil {
 			return lockErr
 		}
@@ -213,11 +216,14 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.objects.Delete(r.Context(), []string{transfer.StoragePath})
-	result := map[string]any{"transfer_id": transfer.ID, "status": "accepted", "asset": accepted}
-	responseBytes, _ := json.Marshal(result)
+	result := application.TransferResolutionResult{
+		TransferID: transfer.ID, Status: domain.TransferStatusAccepted, Asset: &accepted,
+	}
+	response := transferResolutionResponse(result)
+	responseBytes, _ := json.Marshal(response)
 	_, _ = a.store.CompleteIdempotencyRecord(r.Context(), record.ID, http.StatusOK, responseBytes)
-	a.audit(r, "transfer.accepted", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, map[string]any{"accepted_asset_id": accepted.ID}, []string{activeUser(r.Context()).ID})
-	writeData(w, r, http.StatusOK, result)
+	a.audit(r, "transfer.accepted", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, application.AuditMetadata{"accepted_asset_id": accepted.ID}, []string{activeUser(r.Context()).ID})
+	writeData(w, r, http.StatusOK, response)
 }
 
 func (a *API) rejectTransfer(w http.ResponseWriter, r *http.Request) {
@@ -261,9 +267,12 @@ func (a *API) rejectTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.objects.Delete(r.Context(), []string{transfer.StoragePath})
-	result := map[string]any{"transfer_id": transfer.ID, "status": "rejected"}
-	responseBytes, _ := json.Marshal(result)
+	result := application.TransferResolutionResult{
+		TransferID: transfer.ID, Status: domain.TransferStatusRejected,
+	}
+	response := transferResolutionResponse(result)
+	responseBytes, _ := json.Marshal(response)
 	_, _ = a.store.CompleteIdempotencyRecord(r.Context(), record.ID, http.StatusOK, responseBytes)
 	a.audit(r, "transfer.rejected", "transfer", transfer.ID, transfer.DestinationBrainID, nil, &transfer.ExecutionID, domain.AuditStatusSucceeded, nil, []string{activeUser(r.Context()).ID})
-	writeData(w, r, http.StatusOK, result)
+	writeData(w, r, http.StatusOK, response)
 }

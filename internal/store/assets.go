@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -20,7 +21,7 @@ func scanAsset(row interface{ Scan(...any) error }) (domain.Asset, error) {
 	return asset, err
 }
 
-func (s *Store) InsertAsset(ctx context.Context, input AssetInput) (domain.Asset, error) {
+func (s *Store) InsertAsset(ctx context.Context, input application.AssetWriteCommand) (domain.Asset, error) {
 	asset, err := scanAsset(s.db.QueryRow(ctx, `
 		insert into public.assets (
 			id, brain_id, object_key, storage_path, original_filename, media_type,
@@ -42,7 +43,7 @@ func (s *Store) InsertAsset(ctx context.Context, input AssetInput) (domain.Asset
 
 // UpdateAsset atomically replaces the mutable metadata of one existing asset.
 // The ID and Brain ID are used only to identify the row and cannot be changed.
-func (s *Store) UpdateAsset(ctx context.Context, input AssetInput) (domain.Asset, error) {
+func (s *Store) UpdateAsset(ctx context.Context, input application.AssetWriteCommand) (domain.Asset, error) {
 	asset, err := scanAsset(s.db.QueryRow(ctx, `
 		update public.assets
 		set object_key = $3,

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 	openaiapi "secure-brain/internal/openai"
 	"secure-brain/internal/storage"
@@ -111,17 +112,17 @@ func New(store *store.Store, objects storage.ObjectStore, options Options) http.
 }
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
-	writeData(w, r, http.StatusOK, map[string]string{"status": "ok"})
+	writeData(w, r, http.StatusOK, statusDTO{Status: "ok"})
 }
 
 func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := a.store.Ping(ctx); err != nil {
-		writeData(w, r, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+		writeData(w, r, http.StatusServiceUnavailable, statusDTO{Status: "unavailable"})
 		return
 	}
-	writeData(w, r, http.StatusOK, map[string]string{"status": "ready"})
+	writeData(w, r, http.StatusOK, statusDTO{Status: "ready"})
 }
 
 func (a *API) requireSession(next http.Handler) http.Handler {
@@ -160,7 +161,7 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	writeData(w, r, http.StatusOK, users)
+	writeData(w, r, http.StatusOK, userListResponse(users))
 }
 
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
@@ -186,14 +187,25 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	metadata := []byte(`{"mock_auth":true}`)
-	_, _ = a.store.InsertAuditEvent(r.Context(), store.AuditEventInput{ID: newUUID(), EventType: "session.started", ActorUserID: &user.ID, ResourceType: "session", ResourceID: &session.ID, Status: domain.AuditStatusSucceeded, Metadata: metadata, ViewerUserIDs: []string{user.ID}})
+	_, _ = a.store.InsertAuditEvent(r.Context(), application.AuditRecordCommand{
+		ID: newUUID(), EventType: "session.started", ActorUserID: &user.ID,
+		ResourceType: "session", ResourceID: &session.ID,
+		Status:        domain.AuditStatusSucceeded,
+		Metadata:      application.AuditMetadata{"mock_auth": true},
+		ViewerUserIDs: []string{user.ID},
+	})
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: cookieValue, Path: "/", MaxAge: 43200, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
-	writeData(w, r, http.StatusCreated, map[string]any{"user": user, "mock_auth": true, "disclosure": "Local demo authentication only."})
+	writeData(w, r, http.StatusCreated, sessionDTO{
+		User: userResponse(user), MockAuth: true,
+		Disclosure: "Local demo authentication only.",
+	})
 }
 
 func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
-	writeData(w, r, http.StatusOK, map[string]any{"user": activeUser(r.Context()), "mock_auth": true, "disclosure": "Local demo authentication only."})
+	writeData(w, r, http.StatusOK, sessionDTO{
+		User: userResponse(activeUser(r.Context())), MockAuth: true,
+		Disclosure: "Local demo authentication only.",
+	})
 }
 
 func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
@@ -249,12 +261,7 @@ func (a *API) listBrains(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	if owner == nil {
-		for i := range brains {
-			brains[i].OwnerUserID = ""
-		}
-	}
-	writeData(w, r, http.StatusOK, brains)
+	writeData(w, r, http.StatusOK, brainListResponse(brains, owner != nil))
 }
 
 func (a *API) createBrain(w http.ResponseWriter, r *http.Request) {
@@ -272,8 +279,8 @@ func (a *API) createBrain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "brain.created", "brain", brain.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"canonical_id": brain.CanonicalID}, []string{brain.OwnerUserID})
-	writeData(w, r, http.StatusCreated, brain)
+	a.audit(r, "brain.created", "brain", brain.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": brain.CanonicalID}, []string{brain.OwnerUserID})
+	writeData(w, r, http.StatusCreated, brainResponse(brain, true))
 }
 
 func (a *API) getBrain(w http.ResponseWriter, r *http.Request) {
@@ -282,10 +289,7 @@ func (a *API) getBrain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The Brain does not exist."))
 		return
 	}
-	if brain.OwnerUserID != activeUser(r.Context()).ID {
-		brain.OwnerUserID = ""
-	}
-	writeData(w, r, http.StatusOK, brain)
+	writeData(w, r, http.StatusOK, brainResponse(brain, brain.OwnerUserID == activeUser(r.Context()).ID))
 }
 
 func (a *API) deleteBrain(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +311,7 @@ func (a *API) deleteBrain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "brain.deleted", "brain", brain.ID, nil, nil, nil, domain.AuditStatusSucceeded, map[string]any{"canonical_id": brain.CanonicalID}, []string{brain.OwnerUserID})
+	a.audit(r, "brain.deleted", "brain", brain.ID, nil, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": brain.CanonicalID}, []string{brain.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -322,12 +326,7 @@ func (a *API) listServices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	if owner == nil {
-		for i := range services {
-			services[i].OwnerUserID = ""
-		}
-	}
-	writeData(w, r, http.StatusOK, services)
+	writeData(w, r, http.StatusOK, serviceListResponse(services, owner != nil))
 }
 
 func (a *API) createService(w http.ResponseWriter, r *http.Request) {
@@ -345,8 +344,8 @@ func (a *API) createService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "service.created", "service", service.ID, nil, &service.ID, nil, domain.AuditStatusSucceeded, map[string]any{"canonical_id": service.CanonicalID}, []string{service.OwnerUserID})
-	writeData(w, r, http.StatusCreated, service)
+	a.audit(r, "service.created", "service", service.ID, nil, &service.ID, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": service.CanonicalID}, []string{service.OwnerUserID})
+	writeData(w, r, http.StatusCreated, serviceResponse(service, true))
 }
 
 func (a *API) getService(w http.ResponseWriter, r *http.Request) {
@@ -355,10 +354,7 @@ func (a *API) getService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeNodeNotFound, "The Service does not exist."))
 		return
 	}
-	if service.OwnerUserID != activeUser(r.Context()).ID {
-		service.OwnerUserID = ""
-	}
-	writeData(w, r, http.StatusOK, service)
+	writeData(w, r, http.StatusOK, serviceResponse(service, service.OwnerUserID == activeUser(r.Context()).ID))
 }
 
 func (a *API) deleteService(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +376,7 @@ func (a *API) deleteService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	a.audit(r, "service.deleted", "service", service.ID, nil, nil, nil, domain.AuditStatusSucceeded, map[string]any{"canonical_id": service.CanonicalID}, []string{service.OwnerUserID})
+	a.audit(r, "service.deleted", "service", service.ID, nil, nil, nil, domain.AuditStatusSucceeded, application.AuditMetadata{"canonical_id": service.CanonicalID}, []string{service.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
