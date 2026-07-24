@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -104,7 +105,7 @@ func (s *Store) GetAssetByObjectKey(ctx context.Context, brainID, objectKey stri
 
 func (s *Store) ListAssets(ctx context.Context, brainID string, limit int) ([]domain.Asset, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = application.DefaultLimits().DefaultPageSize
 	}
 	rows, err := s.db.Query(ctx, `
 		select id, brain_id, object_key, storage_path, original_filename, media_type,

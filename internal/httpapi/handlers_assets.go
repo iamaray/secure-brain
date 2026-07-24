@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -27,7 +26,7 @@ func (a *API) listAssets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	items, err := a.store.ListAssets(r.Context(), brain.ID, 50)
+	items, err := a.store.ListAssets(r.Context(), brain.ID, a.limits.DefaultPageSize)
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -59,7 +58,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeStorageProviderError, "Storage is unavailable."))
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, a.maxFileBytes+(1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, a.limits.MaxFileBytes+a.limits.MaxMultipartOverheadBytes)
 	reader, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "A multipart upload is required."))
@@ -103,7 +102,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			fileSeen, filename, clientMediaType = true, filepath.Base(part.FileName()), part.Header.Get("Content-Type")
-			written, copyErr := io.Copy(io.MultiWriter(temp, hash), io.LimitReader(part, a.maxFileBytes+1))
+			written, copyErr := io.Copy(io.MultiWriter(temp, hash), io.LimitReader(part, a.limits.MaxFileBytes+1))
 			size = written
 			if copyErr != nil {
 				part.Close()
@@ -128,7 +127,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "Exactly one named file is required."))
 		return
 	}
-	if size > a.maxFileBytes {
+	if size > a.limits.MaxFileBytes {
 		writeError(w, r, domain.NewError(domain.CodePayloadTooLarge, "The file exceeds the upload size limit."))
 		return
 	}
@@ -150,7 +149,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	bytes, err := io.ReadAll(io.LimitReader(temp, a.maxFileBytes+1))
+	bytes, err := io.ReadAll(io.LimitReader(temp, a.limits.MaxFileBytes+1))
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -159,7 +158,7 @@ func (a *API) uploadAsset(w http.ResponseWriter, r *http.Request) {
 	checksum := hex.EncodeToString(hash.Sum(nil))
 	assetID := existing.ID
 	if existingErr != nil {
-		assetID = newUUID()
+		assetID = a.ids.NewUUID()
 	}
 	storagePath := fmt.Sprintf("brains/%s/assets/%s/%s", brain.ID, assetID, checksum)
 	parseError := (*string)(nil)
@@ -234,12 +233,12 @@ func (a *API) assetContent(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(w, io.LimitReader(body, asset.ByteSize))
 		return
 	}
-	data, err := io.ReadAll(io.LimitReader(body, a.maxFileBytes+1))
+	data, err := io.ReadAll(io.LimitReader(body, a.limits.MaxFileBytes+1))
 	if err != nil {
 		writeError(w, r, domain.NewError(domain.CodeStorageProviderError, "The asset could not be read."))
 		return
 	}
-	preview, err := assets.BuildPreview(string(asset.Format), string(asset.ProcessingState), data, int(a.maxPreviewBytes), min(a.maxCSVRows, 100))
+	preview, err := assets.BuildPreview(string(asset.Format), string(asset.ProcessingState), data, int(a.limits.MaxPreviewBytes), min(a.limits.MaxCSVRows, a.limits.MaxCSVPreviewRows))
 	if err != nil {
 		if asset.ProcessingState == domain.AssetStateParseFailed {
 			preview = assets.Preview{Kind: "binary"}
@@ -278,15 +277,4 @@ func (a *API) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	_ = a.objects.Delete(r.Context(), []string{asset.StoragePath})
 	a.audit(r, "asset.deleted", "asset", asset.ID, &brain.ID, nil, nil, domain.AuditStatusSucceeded, map[string]any{"object_key": asset.ObjectKey}, []string{brain.OwnerUserID})
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func newUUID() string {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		panic("crypto/rand unavailable")
-	}
-	value[6] = (value[6] & 0x0f) | 0x40
-	value[8] = (value[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(value[:])
-	return strings.Join([]string{h[:8], h[8:12], h[12:16], h[16:20], h[20:]}, "-")
 }

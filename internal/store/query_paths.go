@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -282,7 +283,7 @@ func (s *Store) ResolveEnabledQueryPath(ctx context.Context, sourceCanonicalID, 
 
 func (s *Store) ListQueryPaths(ctx context.Context, brainID string, limit int) ([]domain.QueryPath, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = application.DefaultLimits().DefaultPageSize
 	}
 	rows, err := s.db.Query(ctx, `
 		select id, brain_id, path, visibility, state, operations,

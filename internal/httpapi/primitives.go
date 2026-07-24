@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,18 +10,17 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
-	"time"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
-
-const maxJSONBody = 1 << 20
 
 type contextKey string
 
 const (
 	requestIDKey contextKey = "request_id"
 	userKey      contextKey = "user"
+	limitsKey    contextKey = "limits"
 )
 
 type responseRecorder struct {
@@ -46,7 +43,7 @@ func (w *responseRecorder) Write(p []byte) (int, error) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+	r.Body = http.MaxBytesReader(w, r.Body, limitsFromContext(r.Context()).MaxJSONBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
@@ -108,21 +105,21 @@ func requestID(ctx context.Context) string {
 	return "req_unknown"
 }
 
-func newRequestID() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("req_%d", time.Now().UnixNano())
+func limitsFromContext(ctx context.Context) application.Limits {
+	if limits, ok := ctx.Value(limitsKey).(application.Limits); ok {
+		return limits
 	}
-	return "req_" + hex.EncodeToString(b)
+	return application.DefaultLimits()
 }
 
-func withMiddleware(next http.Handler, logger *slog.Logger, frontendOrigin string) http.Handler {
+func withMiddleware(next http.Handler, logger *slog.Logger, frontendOrigin string, clock application.Clock, ids application.IDGenerator, limits application.Limits) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		started := time.Now()
-		requestID := newRequestID()
+		started := clock.Now()
+		requestID := ids.NewRequestID()
+		requestContext := context.WithValue(r.Context(), limitsKey, limits)
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/q/") {
@@ -131,7 +128,8 @@ func withMiddleware(next http.Handler, logger *slog.Logger, frontendOrigin strin
 		origin := r.Header.Get("Origin")
 		if origin != "" {
 			if origin != frontendOrigin {
-				writeError(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, requestID)), domain.NewError(domain.CodeNotAuthorized, "The request origin is not allowed."))
+				ctx := context.WithValue(requestContext, requestIDKey, requestID)
+				writeError(w, r.WithContext(ctx), domain.NewError(domain.CodeNotAuthorized, "The request origin is not allowed."))
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", frontendOrigin)
@@ -145,7 +143,7 @@ func withMiddleware(next http.Handler, logger *slog.Logger, frontendOrigin strin
 			return
 		}
 		recorder := &responseRecorder{ResponseWriter: w}
-		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		ctx := context.WithValue(requestContext, requestIDKey, requestID)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Error("request panic", "request_id", requestID, "panic_type", fmt.Sprintf("%T", recovered), "stack", string(debug.Stack()))
@@ -157,7 +155,11 @@ func withMiddleware(next http.Handler, logger *slog.Logger, frontendOrigin strin
 			if status == 0 {
 				status = http.StatusOK
 			}
-			logger.Info("request completed", "request_id", requestID, "method", r.Method, "path", safeLogPath(r.URL.Path), "status", status, "duration_ms", time.Since(started).Milliseconds())
+			duration := clock.Now().Sub(started).Milliseconds()
+			if duration < 0 {
+				duration = 0
+			}
+			logger.Info("request completed", "request_id", requestID, "method", r.Method, "path", safeLogPath(r.URL.Path), "status", status, "duration_ms", duration)
 		}()
 		next.ServeHTTP(recorder, r.WithContext(ctx))
 	})

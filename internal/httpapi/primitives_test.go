@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -23,6 +25,20 @@ func TestStrictJSON(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("body %s error = %v", tc.body, err)
 		}
+	}
+}
+
+func TestStrictJSONUsesRuntimeLimit(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"value":"too long"}`))
+	limits := application.DefaultLimits()
+	limits.MaxJSONBodyBytes = 8
+	req = req.WithContext(context.WithValue(req.Context(), limitsKey, limits))
+	recorder := httptest.NewRecorder()
+	var dst struct {
+		Value string `json:"value"`
+	}
+	if err := decodeJSON(recorder, req, &dst); err == nil {
+		t.Fatal("oversized JSON was accepted")
 	}
 }
 

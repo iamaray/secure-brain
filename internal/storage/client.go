@@ -17,7 +17,6 @@ import (
 
 const (
 	maxProviderErrorBody = 8 << 10
-	maxObjectBytes       = int64(25 << 20)
 )
 
 type ObjectMetadata struct {
@@ -38,9 +37,10 @@ type Client struct {
 	bucket         string
 	serviceRoleKey string
 	httpClient     *http.Client
+	maxObjectBytes int64
 }
 
-func NewClient(baseURL, bucket, serviceRoleKey string, httpClient *http.Client) (*Client, error) {
+func NewClient(baseURL, bucket, serviceRoleKey string, httpClient *http.Client, maxObjectBytes int64) (*Client, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	u, err := url.Parse(baseURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -52,6 +52,9 @@ func NewClient(baseURL, bucket, serviceRoleKey string, httpClient *http.Client) 
 	if strings.TrimSpace(serviceRoleKey) == "" {
 		return nil, fmt.Errorf("storage service-role key is required")
 	}
+	if maxObjectBytes <= 0 {
+		return nil, fmt.Errorf("storage object limit must be positive")
+	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -60,6 +63,7 @@ func NewClient(baseURL, bucket, serviceRoleKey string, httpClient *http.Client) 
 		bucket:         bucket,
 		serviceRoleKey: serviceRoleKey,
 		httpClient:     httpClient,
+		maxObjectBytes: maxObjectBytes,
 	}, nil
 }
 
@@ -67,7 +71,7 @@ func (c *Client) Put(ctx context.Context, path, mediaType string, body io.Reader
 	if body == nil {
 		return fmt.Errorf("storage Put body is required")
 	}
-	if size < 0 || size > maxObjectBytes {
+	if size < 0 || size > c.maxObjectBytes {
 		return &domain.Error{Code: domain.CodePayloadTooLarge, Message: "The object exceeds the Storage size limit."}
 	}
 	endpoint, err := c.objectEndpoint("/storage/v1/object", path)
@@ -133,11 +137,11 @@ func (c *Client) Get(ctx context.Context, path string) (io.ReadCloser, ObjectMet
 		if value := resp.Header.Get("Last-Modified"); value != "" {
 			metadata.LastModified, _ = http.ParseTime(value)
 		}
-		if metadata.Size > maxObjectBytes {
+		if metadata.Size > c.maxObjectBytes {
 			resp.Body.Close()
 			return nil, ObjectMetadata{}, providerError("download object", 0, fmt.Errorf("object exceeds configured bound"))
 		}
-		return &boundedReadCloser{ReadCloser: resp.Body, remaining: maxObjectBytes}, metadata, nil
+		return &boundedReadCloser{ReadCloser: resp.Body, remaining: c.maxObjectBytes}, metadata, nil
 	}
 	panic("unreachable")
 }

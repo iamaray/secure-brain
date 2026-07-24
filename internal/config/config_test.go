@@ -38,13 +38,13 @@ func TestLoadFromDefaultsAndNormalization(t *testing.T) {
 	if c.OpenAIModel != "gpt-5.6-luna" || c.OpenAIBaseURL != "https://api.openai.com" {
 		t.Fatalf("unexpected OpenAI defaults: %#v", c)
 	}
-	if c.StorageBucket != "securebrain-private" || c.MaxFileBytes != 10485760 || c.MaxRouteHops != 20 {
+	if c.StorageBucket != "securebrain-private" || c.Limits.MaxFileBytes != 10485760 || c.Limits.MaxRouteHops != 20 {
 		t.Fatalf("unexpected storage/route defaults: %#v", c)
 	}
-	if c.MaxRoutePayloadBytes != 26214400 || c.MaxPreviewBytes != 262144 || c.MaxCSVRows != 500 {
+	if c.Limits.MaxPayloadBytes != 26214400 || c.Limits.MaxPreviewBytes != 262144 || c.Limits.MaxCSVRows != 500 {
 		t.Fatalf("unexpected size defaults: %#v", c)
 	}
-	if c.TransferTTL != 24*time.Hour || c.ChatHistoryMessages != 20 || c.ChatMaxOutputTokens != 600 {
+	if c.Limits.TransferTTL != 24*time.Hour || c.Limits.ChatHistoryMessages != 20 || c.Limits.ChatMaxOutputTokens != 600 {
 		t.Fatalf("unexpected transfer/chat defaults: %#v", c)
 	}
 	if c.ChatDisabled || c.LogLevel != slog.LevelInfo {
@@ -68,6 +68,28 @@ func TestLoadFromAllowsMissingOpenAIKeyOnlyWhenChatDisabled(t *testing.T) {
 	}
 }
 
+func TestLoadFromBuildsOneRuntimeLimitsValue(t *testing.T) {
+	values := validEnvironment()
+	values["MAX_FILE_BYTES"] = "1024"
+	values["MAX_ROUTE_PAYLOAD_BYTES"] = "2048"
+	values["MAX_ROUTE_HOPS"] = "3"
+	values["MAX_PREVIEW_BYTES"] = "512"
+	values["MAX_CSV_ROWS"] = "12"
+	values["TRANSFER_TTL"] = "2h"
+	values["CHAT_HISTORY_MESSAGES"] = "4"
+	values["CHAT_MAX_OUTPUT_TOKENS"] = "32"
+	c, err := LoadFrom(lookup(values))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if c.Limits.MaxFileBytes != 1024 || c.Limits.MaxPayloadBytes != 2048 ||
+		c.Limits.MaxRouteHops != 3 || c.Limits.MaxPreviewBytes != 512 ||
+		c.Limits.MaxCSVRows != 12 || c.Limits.TransferTTL != 2*time.Hour ||
+		c.Limits.ChatHistoryMessages != 4 || c.Limits.ChatMaxOutputTokens != 32 {
+		t.Fatalf("unexpected runtime limits: %#v", c.Limits)
+	}
+}
+
 func TestLoadFromRejectsInvalidValuesWithoutLeakingSecrets(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -78,9 +100,9 @@ func TestLoadFromRejectsInvalidValuesWithoutLeakingSecrets(t *testing.T) {
 		{"bad database URL", "DATABASE_URL", "http://secret.invalid/postgres"},
 		{"bad URL", "SUPABASE_URL", "secret-value-not-a-url"},
 		{"bad HTTP address", "HTTP_ADDR", "localhost"},
-		{"route SQL ceiling", "MAX_ROUTE_HOPS", "21"},
-		{"file SQL ceiling", "MAX_FILE_BYTES", "26214401"},
-		{"payload SQL ceiling", "MAX_ROUTE_PAYLOAD_BYTES", "26214401"},
+		{"route safety ceiling", "MAX_ROUTE_HOPS", "21"},
+		{"file safety ceiling", "MAX_FILE_BYTES", "26214401"},
+		{"payload safety ceiling", "MAX_ROUTE_PAYLOAD_BYTES", "26214401"},
 		{"zero integer", "MAX_CSV_ROWS", "0"},
 		{"bad duration", "TRANSFER_TTL", "tomorrow"},
 		{"strict boolean", "CHAT_DISABLED", "1"},

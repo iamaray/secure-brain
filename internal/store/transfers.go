@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -61,7 +62,7 @@ func (s *Store) GetTransfer(ctx context.Context, transferID string) (domain.Tran
 
 func (s *Store) ListTransfers(ctx context.Context, filter TransferFilter) ([]domain.Transfer, error) {
 	if filter.Limit <= 0 {
-		filter.Limit = 50
+		filter.Limit = application.DefaultLimits().DefaultPageSize
 	}
 	var query string
 	switch filter.Direction {

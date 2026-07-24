@@ -26,7 +26,7 @@ func (a *API) listTransfers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	_, _ = a.store.ExpirePendingTransfers(r.Context(), a.now())
+	_, _ = a.store.ExpirePendingTransfers(r.Context(), a.clock.Now())
 	direction := r.URL.Query().Get("direction")
 	if direction == "" {
 		direction = "incoming"
@@ -40,7 +40,7 @@ func (a *API) listTransfers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeInvalidRequest, "status is invalid."))
 		return
 	}
-	items, err := a.store.ListTransfers(r.Context(), store.TransferFilter{BrainID: brain.ID, Direction: direction, Status: status, Limit: 50})
+	items, err := a.store.ListTransfers(r.Context(), store.TransferFilter{BrainID: brain.ID, Direction: direction, Status: status, Limit: a.limits.DefaultPageSize})
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
@@ -49,7 +49,7 @@ func (a *API) listTransfers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getTransfer(w http.ResponseWriter, r *http.Request) {
-	_, _ = a.store.ExpirePendingTransfers(r.Context(), a.now())
+	_, _ = a.store.ExpirePendingTransfers(r.Context(), a.clock.Now())
 	transfer, destinationOwned, err := a.visibleTransfer(r)
 	if err != nil {
 		writeError(w, r, err)
@@ -67,7 +67,7 @@ func (a *API) getTransfer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer body.Close()
-		limit := a.maxPreviewBytes
+		limit := a.limits.MaxPreviewBytes
 		data, err := io.ReadAll(io.LimitReader(body, limit+1))
 		if err != nil {
 			writeError(w, r, domain.NewError(domain.CodeStorageProviderError, "The transfer preview could not be read."))
@@ -152,11 +152,11 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.NewError(domain.CodeTransferAlreadyResolved, "The transfer has already been resolved."))
 		return
 	}
-	if !transfer.ExpiresAt.After(a.now()) {
+	if !transfer.ExpiresAt.After(a.clock.Now()) {
 		writeError(w, r, domain.NewError(domain.CodeTransferExpired, "The transfer has expired."))
 		return
 	}
-	assetID := newUUID()
+	assetID := a.ids.NewUUID()
 	var accepted domain.Asset
 	err = a.store.InTx(r.Context(), func(tx *store.Store) error {
 		locked, lockErr := tx.LockTransfer(r.Context(), transfer.ID)
@@ -166,8 +166,8 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 		if locked.Status != domain.TransferStatusPending {
 			return domain.NewError(domain.CodeTransferAlreadyResolved, "The transfer has already been resolved.")
 		}
-		if !locked.ExpiresAt.After(a.now()) {
-			_, _ = tx.MarkTransferExpired(r.Context(), locked.ID, a.now())
+		if !locked.ExpiresAt.After(a.clock.Now()) {
+			_, _ = tx.MarkTransferExpired(r.Context(), locked.ID, a.clock.Now())
 			return domain.NewError(domain.CodeTransferExpired, "The transfer has expired.")
 		}
 		if _, collisionErr := tx.GetAssetByObjectKey(r.Context(), *locked.DestinationBrainID, body.ObjectKey); collisionErr == nil {
@@ -180,8 +180,8 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 			return getErr
 		}
 		defer source.Close()
-		data, readErr := io.ReadAll(io.LimitReader(source, int64(a.maxRoutePayloadBytes)+1))
-		if readErr != nil || len(data) > a.maxRoutePayloadBytes {
+		data, readErr := io.ReadAll(io.LimitReader(source, a.limits.MaxPayloadBytes+1))
+		if readErr != nil || int64(len(data)) > a.limits.MaxPayloadBytes {
 			return domain.NewError(domain.CodePayloadTooLarge, "The transfer exceeds the configured payload limit.")
 		}
 		sum := sha256.Sum256(data)
@@ -205,7 +205,7 @@ func (a *API) acceptTransfer(w http.ResponseWriter, r *http.Request) {
 		if lockErr != nil {
 			return lockErr
 		}
-		_, lockErr = tx.MarkTransferAccepted(r.Context(), locked.ID, accepted.ID, a.now())
+		_, lockErr = tx.MarkTransferAccepted(r.Context(), locked.ID, accepted.ID, a.clock.Now())
 		return lockErr
 	})
 	if err != nil {
@@ -253,7 +253,7 @@ func (a *API) rejectTransfer(w http.ResponseWriter, r *http.Request) {
 		if locked.Status != domain.TransferStatusPending {
 			return domain.NewError(domain.CodeTransferAlreadyResolved, "The transfer has already been resolved.")
 		}
-		_, lockErr = tx.MarkTransferRejected(r.Context(), locked.ID, a.now())
+		_, lockErr = tx.MarkTransferRejected(r.Context(), locked.ID, a.clock.Now())
 		return lockErr
 	})
 	if err != nil {

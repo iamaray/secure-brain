@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 	openaiapi "secure-brain/internal/openai"
 	"secure-brain/internal/query"
@@ -196,13 +197,12 @@ func newWorkflowFixture(t *testing.T) *workflowFixture {
 	fixture.objects = newRecordingObjectStore()
 	fixture.chat = &recordingChatClient{responses: []string{"first answer", "second answer"}}
 	fixture.api = &API{
-		store: fixture.db, objects: fixture.objects, now: time.Now,
-		maxFileBytes: 10 << 20, maxPreviewBytes: 256 << 10, maxCSVRows: 500,
-		maxRoutePayloadBytes: 25 << 20, maxRouteHops: 20, transferTTL: 24 * time.Hour,
-		chat: fixture.chat, chatModel: "workflow-model", chatHistoryMessages: 20,
-		chatMaxOutputTokens: 64, appConnections: newAppConnectionState(),
+		store: fixture.db, objects: fixture.objects, clock: application.SystemClock{},
+		ids: application.RandomIDGenerator{}, limits: application.DefaultLimits(),
+		chat: fixture.chat, chatModel: "workflow-model", appConnections: newAppConnectionState(),
 		networkCanvas: newNetworkCanvasState(),
 	}
+	fixture.api.limits.ChatMaxOutputTokens = 64
 	return fixture
 }
 

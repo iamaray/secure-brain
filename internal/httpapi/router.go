@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 	openaiapi "secure-brain/internal/openai"
 	"secure-brain/internal/storage"
@@ -21,46 +22,44 @@ import (
 var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 type API struct {
-	store                *store.Store
-	sessionSecret        []byte
-	frontendOrigin       string
-	logger               *slog.Logger
-	now                  func() time.Time
-	objects              storage.ObjectStore
-	maxFileBytes         int64
-	maxPreviewBytes      int64
-	maxCSVRows           int
-	maxRoutePayloadBytes int
-	maxRouteHops         int
-	transferTTL          time.Duration
-	chat                 openaiapi.ChatClient
-	chatModel            string
-	chatHistoryMessages  int
-	chatMaxOutputTokens  int
-	chatDisabled         bool
-	appConnections       *appConnectionState
-	networkCanvas        *networkCanvasState
+	store          *store.Store
+	sessionSecret  []byte
+	frontendOrigin string
+	logger         *slog.Logger
+	clock          application.Clock
+	ids            application.IDGenerator
+	limits         application.Limits
+	objects        storage.ObjectStore
+	chat           openaiapi.ChatClient
+	chatModel      string
+	chatDisabled   bool
+	appConnections *appConnectionState
+	networkCanvas  *networkCanvasState
 }
 
 type Options struct {
-	SessionSecret        []byte
-	FrontendOrigin       string
-	Logger               *slog.Logger
-	MaxFileBytes         int64
-	MaxPreviewBytes      int64
-	MaxCSVRows           int
-	MaxRoutePayloadBytes int
-	MaxRouteHops         int
-	TransferTTL          time.Duration
-	Chat                 openaiapi.ChatClient
-	ChatModel            string
-	ChatHistoryMessages  int
-	ChatMaxOutputTokens  int
-	ChatDisabled         bool
+	SessionSecret  []byte
+	FrontendOrigin string
+	Logger         *slog.Logger
+	Limits         application.Limits
+	Clock          application.Clock
+	IDGenerator    application.IDGenerator
+	Chat           openaiapi.ChatClient
+	ChatModel      string
+	ChatDisabled   bool
 }
 
 func New(store *store.Store, objects storage.ObjectStore, options Options) http.Handler {
-	api := &API{store: store, objects: objects, sessionSecret: options.SessionSecret, frontendOrigin: options.FrontendOrigin, logger: options.Logger, now: time.Now, maxFileBytes: options.MaxFileBytes, maxPreviewBytes: options.MaxPreviewBytes, maxCSVRows: options.MaxCSVRows, maxRoutePayloadBytes: options.MaxRoutePayloadBytes, maxRouteHops: options.MaxRouteHops, transferTTL: options.TransferTTL, chat: options.Chat, chatModel: options.ChatModel, chatHistoryMessages: options.ChatHistoryMessages, chatMaxOutputTokens: options.ChatMaxOutputTokens, chatDisabled: options.ChatDisabled, appConnections: newAppConnectionState(), networkCanvas: newNetworkCanvasState()}
+	limits := options.Limits.WithDefaults()
+	clock := options.Clock
+	if clock == nil {
+		clock = application.SystemClock{}
+	}
+	ids := options.IDGenerator
+	if ids == nil {
+		ids = application.RandomIDGenerator{Clock: clock}
+	}
+	api := &API{store: store, objects: objects, sessionSecret: options.SessionSecret, frontendOrigin: options.FrontendOrigin, logger: options.Logger, clock: clock, ids: ids, limits: limits, chat: options.Chat, chatModel: options.ChatModel, chatDisabled: options.ChatDisabled, appConnections: newAppConnectionState(), networkCanvas: newNetworkCanvasState()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("GET /readyz", api.ready)
@@ -107,7 +106,7 @@ func New(store *store.Store, objects storage.ObjectStore, options Options) http.
 	mux.Handle("GET /api/brains/{brainId}/chat", api.requireSession(http.HandlerFunc(api.getChat)))
 	mux.Handle("POST /api/brains/{brainId}/chat", api.requireSession(http.HandlerFunc(api.postChat)))
 	mux.Handle("DELETE /api/brains/{brainId}/chat", api.requireSession(http.HandlerFunc(api.clearChat)))
-	return withMiddleware(mux, options.Logger, options.FrontendOrigin)
+	return withMiddleware(mux, options.Logger, options.FrontendOrigin, clock, ids, limits)
 }
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
@@ -141,8 +140,8 @@ func (a *API) requireSession(next http.Handler) http.Handler {
 			writeError(w, r, domain.NewError(domain.CodeNotAuthenticated, "The mock session is invalid or expired."))
 			return
 		}
-		if a.now().Sub(session.LastSeenAt) >= time.Minute {
-			_, _ = a.store.TouchSession(r.Context(), session.ID, a.now())
+		if a.clock.Now().Sub(session.LastSeenAt) >= time.Minute {
+			_, _ = a.store.TouchSession(r.Context(), session.ID, a.clock.Now())
 		}
 		ctx := context.WithValue(r.Context(), userKey, session.User)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -181,13 +180,13 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, databaseError(err))
 		return
 	}
-	session, err := a.store.CreateSession(r.Context(), hash, user.ID, a.now().Add(12*time.Hour))
+	session, err := a.store.CreateSession(r.Context(), hash, user.ID, a.clock.Now().Add(12*time.Hour))
 	if err != nil {
 		writeError(w, r, databaseError(err))
 		return
 	}
 	metadata := []byte(`{"mock_auth":true}`)
-	_, _ = a.store.InsertAuditEvent(r.Context(), store.AuditEventInput{ID: newUUID(), EventType: "session.started", ActorUserID: &user.ID, ResourceType: "session", ResourceID: &session.ID, Status: domain.AuditStatusSucceeded, Metadata: metadata, ViewerUserIDs: []string{user.ID}})
+	_, _ = a.store.InsertAuditEvent(r.Context(), store.AuditEventInput{ID: a.ids.NewUUID(), EventType: "session.started", ActorUserID: &user.ID, ResourceType: "session", ResourceID: &session.ID, Status: domain.AuditStatusSucceeded, Metadata: metadata, ViewerUserIDs: []string{user.ID}})
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: cookieValue, Path: "/", MaxAge: 43200, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
 	writeData(w, r, http.StatusCreated, map[string]any{"user": user, "mock_auth": true, "disclosure": "Local demo authentication only."})
 }

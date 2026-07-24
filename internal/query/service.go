@@ -16,6 +16,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -25,12 +26,6 @@ const (
 	OperationRawRead    = "raw_read"
 	OperationTextSearch = "text_search"
 	OperationCSVQuery   = "csv_query"
-
-	defaultMaxPayloadBytes = 25 * 1024 * 1024
-	defaultMaxCSVRows      = 500
-	defaultMaxTextMatches  = 200
-	defaultMaxContextRunes = 200
-	maxCSVOffset           = 10_000
 )
 
 // Asset combines persisted metadata with the bytes loaded for one immutable
@@ -55,35 +50,10 @@ type Request struct {
 	Offset    int      `json:"offset,omitempty"`
 }
 
-// Limits are configurable application bounds. Non-positive values select the
-// documented defaults, except request offsets and limits, which are validated.
-type Limits struct {
-	MaxPayloadBytes int
-	MaxCSVRows      int
-	MaxTextMatches  int
-	MaxContextRunes int
-}
-
-func (l Limits) withDefaults() Limits {
-	if l.MaxPayloadBytes <= 0 || l.MaxPayloadBytes > defaultMaxPayloadBytes {
-		l.MaxPayloadBytes = defaultMaxPayloadBytes
-	}
-	if l.MaxCSVRows <= 0 || l.MaxCSVRows > defaultMaxCSVRows {
-		l.MaxCSVRows = defaultMaxCSVRows
-	}
-	if l.MaxTextMatches <= 0 || l.MaxTextMatches > defaultMaxTextMatches {
-		l.MaxTextMatches = defaultMaxTextMatches
-	}
-	if l.MaxContextRunes <= 0 || l.MaxContextRunes > defaultMaxContextRunes {
-		l.MaxContextRunes = defaultMaxContextRunes
-	}
-	return l
-}
-
 // Execute applies one allowed query operation and creates the payload before
 // Service traversal. Assets must already be in configured scope order.
-func Execute(assets []Asset, req Request, limits Limits) (domain.Payload, error) {
-	limits = limits.withDefaults()
+func Execute(assets []Asset, req Request, limits application.Limits) (domain.Payload, error) {
+	limits = limits.WithDefaults()
 	if len(assets) == 0 {
 		return domain.Payload{}, queryError("The query path has no scoped assets.")
 	}
@@ -105,7 +75,7 @@ func Execute(assets []Asset, req Request, limits Limits) (domain.Payload, error)
 	if err != nil {
 		return domain.Payload{}, err
 	}
-	if len(payload.Bytes) > limits.MaxPayloadBytes {
+	if int64(len(payload.Bytes)) > limits.MaxPayloadBytes {
 		return domain.Payload{}, &domain.Error{Code: domain.Code("PAYLOAD_TOO_LARGE"), Message: "The routed query payload exceeds the configured size limit."}
 	}
 	return payload, nil
@@ -186,7 +156,7 @@ type textMatch struct {
 	Context    string `json:"context"`
 }
 
-func textSearch(assets []Asset, needle string, limits Limits) (domain.Payload, error) {
+func textSearch(assets []Asset, needle string, limits application.Limits) (domain.Payload, error) {
 	if needle == "" || !utf8.ValidString(needle) {
 		return domain.Payload{}, queryError("Text search requires a non-empty UTF-8 query.")
 	}
@@ -216,7 +186,7 @@ func textSearch(assets []Asset, needle string, limits Limits) (domain.Payload, e
 			}
 			result.Matches = append(result.Matches, textMatch{
 				AssetID: a.Asset.ID, Filename: a.Asset.OriginalFilename,
-				LineNumber: i + 1, Context: boundedContext([]rune(line), start, end, limits.MaxContextRunes),
+				LineNumber: i + 1, Context: boundedContext([]rune(line), start, end, limits.MaxTextContextRunes),
 			})
 		}
 	}
@@ -280,8 +250,8 @@ type csvFileResult struct {
 	HasMore          bool       `json:"has_more"`
 }
 
-func csvQuery(assets []Asset, req Request, limits Limits) (domain.Payload, error) {
-	if req.Offset < 0 || req.Offset > maxCSVOffset {
+func csvQuery(assets []Asset, req Request, limits application.Limits) (domain.Payload, error) {
+	if req.Offset < 0 || req.Offset > limits.MaxCSVOffset {
 		return domain.Payload{}, queryError("CSV offset must be between 0 and 10000.")
 	}
 	if req.Limit < 0 {
@@ -289,7 +259,7 @@ func csvQuery(assets []Asset, req Request, limits Limits) (domain.Payload, error
 	}
 	limit := req.Limit
 	if limit == 0 {
-		limit = 100
+		limit = limits.DefaultCSVRows
 	}
 	if limit > limits.MaxCSVRows {
 		limit = limits.MaxCSVRows

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"secure-brain/internal/application"
 	"secure-brain/internal/domain"
 )
 
@@ -20,7 +21,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	client, err := NewClient(server.URL, "securebrain-private", testServiceKey, server.Client())
+	client, err := NewClient(server.URL, "securebrain-private", testServiceKey, server.Client(), 25<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestClientGetRetriesServerFailureAndReturnsSecondResponse(t *testing.T) {
 func TestClientGetEnforcesDeclaredAndStreamingBounds(t *testing.T) {
 	t.Run("declared content length", func(t *testing.T) {
 		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Length", strconv.FormatInt(maxObjectBytes+1, 10))
+			w.Header().Set("Content-Length", strconv.FormatInt(application.MaxPayloadBytes+1, 10))
 			w.WriteHeader(http.StatusOK)
 		})
 		body, _, err := client.Get(context.Background(), "large/declared")
@@ -168,7 +169,7 @@ func TestClientGetEnforcesDeclaredAndStreamingBounds(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			flusher.Flush()
 			block := strings.Repeat("x", 32<<10)
-			for remaining := maxObjectBytes + 1; remaining > 0; {
+			for remaining := application.MaxPayloadBytes + 1; remaining > 0; {
 				part := int64(len(block))
 				if part > remaining {
 					part = remaining
@@ -216,7 +217,7 @@ func TestClientValidatesConfigurationAndUploadBoundsLocally(t *testing.T) {
 		{name: "missing key", baseURL: "http://127.0.0.1", bucket: "bucket", key: " "},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewClient(test.baseURL, test.bucket, test.key, nil); err == nil {
+			if _, err := NewClient(test.baseURL, test.bucket, test.key, nil, 25<<20); err == nil {
 				t.Fatal("NewClient unexpectedly succeeded")
 			}
 		})
@@ -228,12 +229,18 @@ func TestClientValidatesConfigurationAndUploadBoundsLocally(t *testing.T) {
 	if err := client.Put(context.Background(), "object", "text/plain", nil, 0, false); err == nil {
 		t.Fatal("nil body upload succeeded")
 	}
-	for _, size := range []int64{-1, maxObjectBytes + 1} {
+	for _, size := range []int64{-1, application.MaxPayloadBytes + 1} {
 		err := client.Put(context.Background(), "object", "text/plain", strings.NewReader("x"), size, false)
 		var appErr *domain.Error
 		if !errors.As(err, &appErr) || appErr.Code != domain.CodePayloadTooLarge {
 			t.Fatalf("size %d error = %#v", size, err)
 		}
+	}
+	client.maxObjectBytes = 1
+	err := client.Put(context.Background(), "object", "text/plain", strings.NewReader("xx"), 2, false)
+	var appErr *domain.Error
+	if !errors.As(err, &appErr) || appErr.Code != domain.CodePayloadTooLarge {
+		t.Fatalf("configured object limit error = %#v", err)
 	}
 }
 
