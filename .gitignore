@@ -3,7 +3,7 @@ AGENTS.md
 .agents
 .codex
 .claude
-misc
+misc/
 CLAUDE.md
-scripts
-.github
+scripts/
+.github/workflows/
