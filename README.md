@@ -15,16 +15,17 @@ This repository implements the backend specified by `securebrain-v0-prd.md` and 
 1. Open the Supabase SQL Editor, paste all of [`db/schema.sql`](db/schema.sql), and run it. The script is idempotent and creates the private bucket, schema, RLS posture, three users, three Brains, and two identity Services.
 2. In Supabase's **Connect** dialog, copy a direct or session-pooler Postgres connection string into `DATABASE_URL`.
 3. From project settings, copy the project URL and service-role key into `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The service-role value is a backend secret and must never be placed in frontend code.
-4. Copy `.env.example` to a private environment file and set the required values. Environment files are intentionally not loaded by the program; export them with your preferred local tool.
+4. Copy `.env.example` to a private environment file and set the required values. The application itself does not load environment files; the local `make run` target loads `.env` in an isolated subprocess.
 
-For example:
+Run the backend with:
 
 ```sh
-set -a
-. ./.env.local
-set +a
-go run ./cmd/server
+make run
 ```
+
+To use a differently named file, run `make run ENV_FILE=.env.local`. Variables
+loaded by this target apply only to the server process and do not modify the
+calling shell.
 
 The default address is `http://127.0.0.1:8080`. `GET /healthz` reports process liveness and `GET /readyz` checks Postgres.
 
